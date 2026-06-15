@@ -110,6 +110,16 @@ def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
     return rendered
 
 
+# go.Scattermap  (Plotly ≥ 5.24) – uses bundled Leaflet, no WebGL / CDN needed ✓
+# go.Scattermapbox               – needs Mapbox GL JS CDN + WebGL → blank in many Dash envs ✗
+# go.Scattergeo  (always present) – vector outline, zero dependencies, always works ✓
+#
+# We deliberately skip Scattermapbox: if Scattermap isn't available we fall
+# straight to Scattergeo so the map always renders something.
+_SCATTER_MAP_CLS = getattr(go, "Scattermap", None)   # None when Plotly < 5.24
+_USE_TILE_MAP = _SCATTER_MAP_CLS is not None
+
+
 def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> dcc.Graph:
     lats = [c.get("latitude") for c in candidates]
     lons = [c.get("longitude") for c in candidates]
@@ -136,65 +146,7 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             )
         )
 
-    fig = go.Figure()
-
-    # ── Candidate facility markers ────────────────────────────────────────────
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=lats,
-            lon=lons,
-            mode="markers",
-            text=names,
-            hovertext=hover_text,
-            hoverinfo="text",
-            marker={
-                "size": [max(14, min(34, 14 + s / 8)) for s in scores],
-                "color": scores,
-                "colorscale": [
-                    [0.0,  "#64748b"],   # grey   – low score
-                    [0.35, "#f59e0b"],   # amber  – mid score
-                    [0.7,  "#0d9488"],   # teal   – good score
-                    [1.0,  "#0f766e"],   # dark teal – top score
-                ],
-                "opacity": 0.92,
-                "colorbar": {
-                    "title": {"text": "Score"},
-                    "thickness": 14,
-                    "len": 0.55,
-                    "y": 0.72,
-                    "bgcolor": "rgba(255,255,255,0.85)",
-                    "bordercolor": "#dde3ea",
-                    "borderwidth": 1,
-                    "tickfont": {"size": 11},
-                },
-            },
-            name="Facilities",
-            customdata=distances,
-        )
-    )
-
-    # ── Search-origin pin ─────────────────────────────────────────────────────
-    origin_label = location.get("label") or "Search origin"
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=[location.get("latitude")],
-            lon=[location.get("longitude")],
-            mode="markers+text",
-            text=[f"  {origin_label}"],
-            textposition="middle right",
-            textfont={"size": 12, "color": "#7f1d1d"},
-            hovertext=[f"<b>📍 {origin_label}</b><br>{location.get('method') or ''}"],
-            hoverinfo="text",
-            marker={
-                "size": 24,
-                "color": "#b91c1c",
-                "opacity": 1.0,
-            },
-            name="Search origin",
-        )
-    )
-
-    # ── Auto-zoom & centre ────────────────────────────────────────────────────
+    # ── Auto-zoom & centre (shared by both renderers) ─────────────────────────
     all_lats = [float(v) for v in lats + [location.get("latitude")] if v is not None]
     all_lons = [float(v) for v in lons + [location.get("longitude")] if v is not None]
     center_lat = sum(all_lats) / len(all_lats)
@@ -211,21 +163,130 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
         5
     )
 
-    fig.update_layout(
-        margin={"l": 0, "r": 0, "t": 0, "b": 0},
-        paper_bgcolor="rgba(0,0,0,0)",
-        showlegend=False,
-        hoverlabel={
-            "bgcolor": "#1e293b",
-            "bordercolor": "#334155",
-            "font": {"color": "#f8fafc", "size": 13},
-        },
-        mapbox={
-            "style": "open-street-map",   # full street map, no API key needed
-            "center": {"lat": center_lat, "lon": center_lon},
-            "zoom": zoom,
-        },
-    )
+    origin_label = location.get("label") or "Search origin"
+    origin_hover = f"<b>📍 {origin_label}</b><br>{location.get('method') or ''}"
+
+    marker_colorscale = [
+        [0.0,  "#64748b"],
+        [0.35, "#f59e0b"],
+        [0.7,  "#0d9488"],
+        [1.0,  "#0f766e"],
+    ]
+    marker_colorbar = {
+        "title": {"text": "Score"},
+        "thickness": 14,
+        "len": 0.55,
+        "y": 0.72,
+        "bgcolor": "rgba(255,255,255,0.85)",
+        "bordercolor": "#dde3ea",
+        "borderwidth": 1,
+        "tickfont": {"size": 11},
+    }
+
+    fig = go.Figure()
+
+    if _USE_TILE_MAP:
+        # ── go.Scattermap (Plotly ≥ 5.24, Leaflet, no CDN/WebGL) ────────────
+        # or go.Scattermapbox as fallback – same API surface
+        fig.add_trace(
+            _SCATTER_MAP_CLS(
+                lat=lats,
+                lon=lons,
+                mode="markers",
+                text=names,
+                hovertext=hover_text,
+                hoverinfo="text",
+                marker={
+                    "size": [max(14, min(34, 14 + s / 8)) for s in scores],
+                    "color": scores,
+                    "colorscale": marker_colorscale,
+                    "opacity": 0.92,
+                    "colorbar": marker_colorbar,
+                },
+                name="Facilities",
+                customdata=distances,
+            )
+        )
+        fig.add_trace(
+            _SCATTER_MAP_CLS(
+                lat=[location.get("latitude")],
+                lon=[location.get("longitude")],
+                mode="markers+text",
+                text=[f"  {origin_label}"],
+                textposition="middle right",
+                textfont={"size": 12, "color": "#7f1d1d"},
+                hovertext=[origin_hover],
+                hoverinfo="text",
+                marker={"size": 24, "color": "#b91c1c", "opacity": 1.0},
+                name="Search origin",
+            )
+        )
+        fig.update_layout(
+            margin={"l": 0, "r": 0, "t": 0, "b": 0},
+            paper_bgcolor="rgba(0,0,0,0)",
+            showlegend=False,
+            hoverlabel={
+                "bgcolor": "#1e293b",
+                "bordercolor": "#334155",
+                "font": {"color": "#f8fafc", "size": 13},
+            },
+            map={
+                "style": "open-street-map",
+                "center": {"lat": center_lat, "lon": center_lon},
+                "zoom": zoom,
+            },
+        )
+
+    else:
+        # ── go.Scattergeo fallback (always available, vector outline) ─────────
+        projection_scale = max(2.5, min(18, 15 / max(span, 1.0)))
+        fig.add_trace(
+            go.Scattergeo(
+                lat=lats,
+                lon=lons,
+                mode="markers",
+                text=names,
+                hovertext=hover_text,
+                hoverinfo="text",
+                marker={
+                    "size": [max(10, min(26, 10 + s / 10)) for s in scores],
+                    "color": scores,
+                    "colorscale": marker_colorscale,
+                    "line": {"width": 1, "color": "#ffffff"},
+                    "colorbar": marker_colorbar,
+                },
+                name="Facilities",
+            )
+        )
+        fig.add_trace(
+            go.Scattergeo(
+                lat=[location.get("latitude")],
+                lon=[location.get("longitude")],
+                mode="markers+text",
+                text=["Search origin"],
+                textposition="bottom center",
+                hovertext=[origin_hover],
+                hoverinfo="text",
+                marker={"size": 16, "color": "#b91c1c", "symbol": "star", "line": {"width": 1, "color": "#ffffff"}},
+                name="Search origin",
+            )
+        )
+        fig.update_layout(
+            margin={"l": 0, "r": 0, "t": 0, "b": 0},
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
+            showlegend=False,
+            geo={
+                "scope": "asia",
+                "center": {"lat": center_lat, "lon": center_lon},
+                "projection": {"type": "mercator", "scale": projection_scale},
+                "showland": True, "landcolor": "#f8fafc",
+                "showocean": True, "oceancolor": "#e0f2fe",
+                "showcountries": True, "countrycolor": "#cbd5e1",
+                "showsubunits": True, "subunitcolor": "#e2e8f0",
+                "fitbounds": "locations",
+            },
+        )
 
     return dcc.Graph(
         id="candidate-map",
