@@ -117,6 +117,7 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
     scores = [c.get("score", 0) for c in candidates]
     distances = [c.get("distance_km", 0) for c in candidates]
 
+    # ── Hover tooltips ────────────────────────────────────────────────────────
     hover_text = []
     for c in candidates:
         evidence_terms: list[str] = []
@@ -127,17 +128,19 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             "<br>".join(
                 [
                     f"<b>{c.get('name') or 'Unnamed facility'}</b>",
-                    f"Distance: {c.get('distance_km', 0):.1f} km",
-                    f"Score: {c.get('score', 0):.0f}",
-                    f"Type: {c.get('facility_type') or 'facility'}",
-                    f"Evidence: {evidence_label}",
+                    f"📏 {c.get('distance_km', 0):.1f} km away",
+                    f"⭐ Score: {c.get('score', 0):.0f}",
+                    f"🏥 {c.get('facility_type') or 'facility'}",
+                    f"🔬 {evidence_label}",
                 ]
             )
         )
 
     fig = go.Figure()
+
+    # ── Candidate facility markers ────────────────────────────────────────────
     fig.add_trace(
-        go.Scattergeo(
+        go.Scattermapbox(
             lat=lats,
             lon=lons,
             mode="markers",
@@ -145,67 +148,95 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             hovertext=hover_text,
             hoverinfo="text",
             marker={
-                "size": [max(10, min(26, 10 + s / 10)) for s in scores],
+                "size": [max(14, min(34, 14 + s / 8)) for s in scores],
                 "color": scores,
-                "colorscale": [[0, "#94a3b8"], [0.45, "#f59e0b"], [1, "#0f766e"]],
-                "line": {"width": 1, "color": "#ffffff"},
-                "colorbar": {"title": "Score", "thickness": 12},
+                "colorscale": [
+                    [0.0,  "#64748b"],   # grey   – low score
+                    [0.35, "#f59e0b"],   # amber  – mid score
+                    [0.7,  "#0d9488"],   # teal   – good score
+                    [1.0,  "#0f766e"],   # dark teal – top score
+                ],
+                "opacity": 0.92,
+                "colorbar": {
+                    "title": {"text": "Score"},
+                    "thickness": 14,
+                    "len": 0.55,
+                    "y": 0.72,
+                    "bgcolor": "rgba(255,255,255,0.85)",
+                    "bordercolor": "#dde3ea",
+                    "borderwidth": 1,
+                    "tickfont": {"size": 11},
+                },
             },
-            name="Candidate facilities",
+            name="Facilities",
             customdata=distances,
         )
     )
+
+    # ── Search-origin pin ─────────────────────────────────────────────────────
+    origin_label = location.get("label") or "Search origin"
     fig.add_trace(
-        go.Scattergeo(
+        go.Scattermapbox(
             lat=[location.get("latitude")],
             lon=[location.get("longitude")],
             mode="markers+text",
-            text=["Search origin"],
-            textposition="bottom center",
-            hovertext=[
-                f"<b>{location.get('label') or 'Search origin'}</b>"
-                f"<br>{location.get('method') or ''}"
-            ],
+            text=[f"  {origin_label}"],
+            textposition="middle right",
+            textfont={"size": 12, "color": "#7f1d1d"},
+            hovertext=[f"<b>📍 {origin_label}</b><br>{location.get('method') or ''}"],
             hoverinfo="text",
-            marker={"size": 16, "color": "#b91c1c", "symbol": "star", "line": {"width": 1, "color": "#ffffff"}},
+            marker={
+                "size": 24,
+                "color": "#b91c1c",
+                "opacity": 1.0,
+            },
             name="Search origin",
         )
     )
 
+    # ── Auto-zoom & centre ────────────────────────────────────────────────────
     all_lats = [float(v) for v in lats + [location.get("latitude")] if v is not None]
     all_lons = [float(v) for v in lons + [location.get("longitude")] if v is not None]
     center_lat = sum(all_lats) / len(all_lats)
     center_lon = sum(all_lons) / len(all_lons)
-    span = max(max(all_lats) - min(all_lats), max(all_lons) - min(all_lons), 1.0)
-    projection_scale = max(2.5, min(18, 15 / span))
+    span = max(max(all_lats) - min(all_lats), max(all_lons) - min(all_lons), 0.05)
+    zoom = (
+        12 if span < 0.25 else
+        11 if span < 0.5  else
+        10 if span < 1.0  else
+        9  if span < 2.5  else
+        8  if span < 5    else
+        7  if span < 10   else
+        6  if span < 20   else
+        5
+    )
 
     fig.update_layout(
         margin={"l": 0, "r": 0, "t": 0, "b": 0},
-        paper_bgcolor="#ffffff",
-        plot_bgcolor="#ffffff",
+        paper_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
-        geo={
-            "scope": "asia",
+        hoverlabel={
+            "bgcolor": "#1e293b",
+            "bordercolor": "#334155",
+            "font": {"color": "#f8fafc", "size": 13},
+        },
+        mapbox={
+            "style": "open-street-map",   # full street map, no API key needed
             "center": {"lat": center_lat, "lon": center_lon},
-            "projection": {"type": "mercator", "scale": projection_scale},
-            "showland": True,
-            "landcolor": "#f8fafc",
-            "showocean": True,
-            "oceancolor": "#e0f2fe",
-            "showlakes": True,
-            "lakecolor": "#e0f2fe",
-            "showcountries": True,
-            "countrycolor": "#cbd5e1",
-            "showsubunits": True,
-            "subunitcolor": "#e2e8f0",
-            "fitbounds": "locations",
+            "zoom": zoom,
         },
     )
 
     return dcc.Graph(
         id="candidate-map",
         figure=fig,
-        config={"displayModeBar": True, "scrollZoom": True, "responsive": True},
+        config={
+            "displayModeBar": True,
+            "scrollZoom": True,
+            "responsive": True,
+            "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+            "toImageButtonOptions": {"format": "png", "scale": 2},
+        },
         className="candidate-map",
     )
 

@@ -297,7 +297,16 @@ button {
 
 .candidate-map {
   width: 100%;
-  height: 430px;
+  height: 500px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* Clip the Leaflet tile map to the card's rounded corners */
+.candidate-map .js-plotly-plot,
+.candidate-map .plotly {
+  border-radius: 6px;
+  overflow: hidden;
 }
 
 .candidate-card {
