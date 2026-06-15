@@ -11,7 +11,8 @@ from urllib.parse import urlparse
 import pandas as pd
 
 
-SCHEMA_DEFAULT = "databricks_virtue_foundation_dataset_dais_2026"
+CATALOG_DEFAULT = "databricks_virtue_foundation_dataset_dais_2026"
+SCHEMA_DEFAULT = "virtue_foundation_dataset"
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,7 @@ def _safe_identifier_part(part: str) -> str:
 def _qualified_table(default_table: str, env_name: str) -> str:
     table_value = os.getenv(env_name, default_table).strip()
     schema = os.getenv("DATABRICKS_SCHEMA", SCHEMA_DEFAULT).strip()
-    catalog = os.getenv("DATABRICKS_CATALOG", "").strip()
+    catalog = os.getenv("DATABRICKS_CATALOG", CATALOG_DEFAULT).strip()
 
     if "." in table_value:
         parts = table_value.split(".")
@@ -45,7 +46,11 @@ def _server_hostname() -> str | None:
     if explicit:
         return explicit.replace("https://", "").rstrip("/")
 
-    host = os.getenv("DATABRICKS_HOST")
+    host = (
+        os.getenv("DATABRICKS_HOST")
+        or os.getenv("DATABRICKS_WORKSPACE_URL")
+        or os.getenv("DATABRICKS_WORKSPACE_HOST")
+    )
     if not host:
         return None
     return urlparse(host).netloc or host.replace("https://", "").rstrip("/")
@@ -63,6 +68,39 @@ def _http_path() -> str | None:
 
 def _databricks_configured() -> bool:
     return bool(_server_hostname() and _http_path())
+
+
+def _databricks_runtime_hint_present() -> bool:
+    return any(
+        os.getenv(name)
+        for name in [
+            "DATABRICKS_HOST",
+            "DATABRICKS_WORKSPACE_URL",
+            "DATABRICKS_WORKSPACE_HOST",
+            "DATABRICKS_SERVER_HOSTNAME",
+            "DATABRICKS_CLIENT_ID",
+            "DATABRICKS_CLIENT_SECRET",
+            "DATABRICKS_TOKEN",
+            "DATABRICKS_WAREHOUSE_ID",
+            "WAREHOUSE_ID",
+        ]
+    )
+
+
+def _databricks_config_error() -> str:
+    missing = []
+    if not _server_hostname():
+        missing.append("workspace host (DATABRICKS_HOST or DATABRICKS_SERVER_HOSTNAME)")
+    if not _http_path():
+        missing.append(
+            "SQL warehouse ID (DATABRICKS_WAREHOUSE_ID from an app resource; valueFrom must match the SQL warehouse resource key)"
+        )
+
+    return (
+        "Databricks SQL is not fully configured. Missing: "
+        + "; ".join(missing)
+        + ". In app.yaml, DATABRICKS_WAREHOUSE_ID should use valueFrom matching your attached SQL warehouse resource key, commonly sql-warehouse."
+    )
 
 
 def _databricks_connection():
@@ -240,7 +278,10 @@ def load_datasets() -> tuple[Datasets, list[str]]:
             datasets, source_notes = _load_from_databricks()
             return datasets, source_notes
         except Exception as exc:
-            notes.append(f"Databricks load failed: {exc}")
+            raise RuntimeError(f"Databricks SQL load failed: {exc}") from exc
+
+    if _databricks_runtime_hint_present():
+        raise RuntimeError(_databricks_config_error())
 
     datasets, source_notes = _load_from_local_csv()
     return datasets, notes + source_notes
