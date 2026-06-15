@@ -1,5 +1,0 @@
-dash==2.18.1
-pandas>=2.2,<3
-openai>=1.93,<2
-databricks-sql-connector>=3.4,<5
-databricks-sdk>=0.33,<1
