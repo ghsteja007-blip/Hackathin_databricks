@@ -308,6 +308,7 @@ app.layout = html.Div(
     children=[
         dcc.Store(id="candidate-store", data=[]),
         dcc.Store(id="shortlist-store", data=[]),
+        dcc.Store(id="geolocation-store", data=None),
         dcc.Download(id="shortlist-download"),
         html.Header(
             className="app-header",
@@ -335,6 +336,18 @@ app.layout = html.Div(
                             placeholder="dialysis near Jaipur",
                             debounce=True,
                             className="query-input",
+                        ),
+                        html.Div(
+                            className="locate-row",
+                            children=[
+                                html.Button(
+                                    "Use My Location",
+                                    id="locate-button",
+                                    className="locate-button",
+                                    title="Use your device's GPS to set the search origin",
+                                ),
+                                html.Span(id="gps-status", className="gps-status"),
+                            ],
                         ),
                         html.Div(
                             className="controls-row",
@@ -406,16 +419,33 @@ app.layout = html.Div(
     State("query-input", "value"),
     State("radius-input", "value"),
     State("limit-input", "value"),
+    State("geolocation-store", "data"),
     prevent_initial_call=True,
 )
-def run_search(n_clicks: int, raw_query: str, radius_km: int, limit: int):
+def run_search(n_clicks: int, raw_query: str, radius_km: int, limit: int, geolocation_data: dict | None):
     if not raw_query or not raw_query.strip():
         return render_empty_state(), [], "Enter a care need and location."
 
     try:
         datasets, data_notes = load_datasets()
         parsed = parse_referral_query(raw_query)
-        location = resolve_location(parsed.location, datasets.facilities, datasets.pincodes)
+
+        gps_lat = geolocation_data.get("latitude") if geolocation_data else None
+        gps_lon = geolocation_data.get("longitude") if geolocation_data else None
+
+        if gps_lat is not None and gps_lon is not None and not geolocation_data.get("error"):
+            accuracy = geolocation_data.get("accuracy")
+            accuracy_note = f"±{int(accuracy)}m" if accuracy else ""
+            location = {
+                "label": f"Your location {accuracy_note}".strip(),
+                "latitude": gps_lat,
+                "longitude": gps_lon,
+                "method": f"device GPS{' ' + accuracy_note if accuracy_note else ''}",
+                "match_count": 1,
+                "warnings": [],
+            }
+        else:
+            location = resolve_location(parsed.location, datasets.facilities, datasets.pincodes)
 
         if not location.get("latitude") or not location.get("longitude"):
             return (
@@ -512,6 +542,51 @@ def download_shortlist(n_clicks, shortlist):
             }
         )
     return dcc.send_data_frame(__import__("pandas").DataFrame(rows).to_csv, "referral_shortlist.csv", index=False)
+
+
+app.clientside_callback(
+    """
+    function(n_clicks) {
+        if (!n_clicks) return window.dash_clientside.no_update;
+        if (!navigator.geolocation) {
+            return {error: 'Geolocation is not supported by this browser.'};
+        }
+        return new Promise(function(resolve) {
+            navigator.geolocation.getCurrentPosition(
+                function(pos) {
+                    resolve({
+                        latitude: pos.coords.latitude,
+                        longitude: pos.coords.longitude,
+                        accuracy: pos.coords.accuracy
+                    });
+                },
+                function(err) {
+                    resolve({error: err.message});
+                },
+                {timeout: 10000, maximumAge: 60000, enableHighAccuracy: true}
+            );
+        });
+    }
+    """,
+    Output("geolocation-store", "data"),
+    Input("locate-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
+app.clientside_callback(
+    """
+    function(data) {
+        if (!data) return '';
+        if (data.error) return '⚠️ ' + data.error;
+        var acc = data.accuracy ? ' (±' + Math.round(data.accuracy) + 'm)' : '';
+        return '✅ Location acquired' + acc;
+    }
+    """,
+    Output("gps-status", "children"),
+    Input("geolocation-store", "data"),
+    prevent_initial_call=True,
+)
 
 
 if __name__ == "__main__":
