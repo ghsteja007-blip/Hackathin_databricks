@@ -103,6 +103,10 @@ def _databricks_config_error() -> str:
     )
 
 
+def _use_cloud_fetch() -> bool:
+    return os.getenv("DATABRICKS_SQL_USE_CLOUD_FETCH", "false").lower() in {"1", "true", "yes", "on"}
+
+
 def _databricks_connection():
     from databricks import sql
 
@@ -116,6 +120,7 @@ def _databricks_connection():
             http_path=http_path,
             access_token=token,
             user_agent_entry="referral-copilot",
+            use_cloud_fetch=_use_cloud_fetch(),
         )
 
     from databricks.sdk.core import Config, oauth_service_principal
@@ -133,6 +138,7 @@ def _databricks_connection():
         http_path=http_path,
         credentials_provider=credential_provider,
         user_agent_entry="referral-copilot",
+        use_cloud_fetch=_use_cloud_fetch(),
     )
 
 
