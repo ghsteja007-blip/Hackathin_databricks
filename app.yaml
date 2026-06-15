@@ -12,6 +12,8 @@ env:
     value: "nfhs_5_district_health_indicators"
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: sql-warehouse
+  - name: DATABRICKS_SQL_USE_CLOUD_FETCH
+    value: "false"
   - name: OPENAI_API_KEY
     valueFrom: openai_api_key
   - name: OPENAI_MODEL
