@@ -14,7 +14,8 @@
       "Bash(C:\\\\Users\\\\adamh\\\\miniconda3\\\\Scripts\\\\pip.exe show *)",
       "PowerShell(& \"C:\\\\Users\\\\adamh\\\\miniconda3\\\\Scripts\\\\pip.exe\" show plotly 2>&1)",
       "PowerShell(& \"C:\\\\Users\\\\adamh\\\\miniconda3\\\\python.exe\" -c \"import plotly.graph_objects as go; has_sm = hasattr\\(go,'Scattermap'\\); print\\('go.Scattermap available:', has_sm\\); import plotly; print\\('Plotly version:', plotly.__version__\\)\")",
-      "PowerShell(& \"C:\\\\Users\\\\adamh\\\\miniconda3\\\\envs\\\\bd_replica\\\\python.exe\" -c \"import sys; print\\(sys.version\\)\" 2>&1; Get-ChildItem \"C:\\\\Users\\\\adamh\\\\miniconda3\\\\envs\\\\bd_replica\\\\Lib\\\\site-packages\" | Where-Object {$_.Name -match \"plotly|dash\"} | Select-Object Name)"
+      "PowerShell(& \"C:\\\\Users\\\\adamh\\\\miniconda3\\\\envs\\\\bd_replica\\\\python.exe\" -c \"import sys; print\\(sys.version\\)\" 2>&1; Get-ChildItem \"C:\\\\Users\\\\adamh\\\\miniconda3\\\\envs\\\\bd_replica\\\\Lib\\\\site-packages\" | Where-Object {$_.Name -match \"plotly|dash\"} | Select-Object Name)",
+      "Bash(python -c ' *)"
     ]
   }
 }

@@ -1,4 +1,3 @@
-import difflib
 import json
 import os
 import re
@@ -8,7 +7,7 @@ from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 import plotly.graph_objects as go
 
 from data_access import load_datasets
-from openai_helpers import parse_referral_query
+from openai_helpers import parse_referral_query, spell_check_location
 from referral_engine import rank_facilities, resolve_location
 
 
@@ -18,56 +17,21 @@ app = Dash(__name__, title=APP_TITLE, suppress_callback_exceptions=True)
 server = app.server
 
 
-# ── Location vocabulary & spell-correction helpers ────────────────────────────
-_location_vocab: list[str] | None = None
-
-
-def _build_location_vocab(pincodes) -> list[str]:
-    """Build a deduplicated list of district + state names for spell-checking."""
-    global _location_vocab
-    if _location_vocab is not None:
-        return _location_vocab
-    names: set[str] = set()
-    for col in ("district", "statename"):
-        if col in pincodes.columns:
-            for val in pincodes[col].dropna().unique():
-                text = str(val).strip().title()
-                if text and text.lower() not in ("na", "nan", "none", ""):
-                    names.add(text)
-    _location_vocab = sorted(names)
-    return _location_vocab
-
+# ── Location extraction helper ────────────────────────────────────────────────
 
 def _extract_location_hint(query: str) -> str:
-    """Pull the location name from a free-text query like 'dialysis near Jaipure'."""
-    m = re.search(
-        r"\b(?:near|around|in|at)\s+([A-Za-z][^\d,\n]{1,40}?)(?:\s*$|\s*,)",
-        query,
-        re.IGNORECASE,
-    )
+    """
+    Pull the location word(s) that follow a preposition in a free-text query.
+    Returns at most the first two words after the preposition so incidental
+    words like 'hospital' or 'clinic' don't pollute the spell-check input.
+    """
+    m = re.search(r"\b(?:near|around|in|at)\s+(\S+(?:\s+\S+)?)", query, re.IGNORECASE)
     if m:
-        return m.group(1).strip()
-    parts = re.split(r"\b(?:near|around|in|at)\b", query, flags=re.IGNORECASE, maxsplit=1)
-    if len(parts) > 1 and parts[1].strip():
-        return parts[1].strip().split()[0]
-    return ""
-
-
-def _suggest_spelling(location_text: str, pincodes) -> str | None:
-    """Return a corrected district/state name, or None if the text looks fine."""
-    if not location_text or len(location_text) < 3:
-        return None
-    vocab = _build_location_vocab(pincodes)
-    if not vocab:
-        return None
-    loc_lower = location_text.lower()
-    vocab_lower = [v.lower() for v in vocab]
-    if loc_lower in vocab_lower:
-        return None  # exact match — no correction needed
-    matches = difflib.get_close_matches(loc_lower, vocab_lower, n=1, cutoff=0.72)
-    if not matches:
-        return None
-    return vocab[vocab_lower.index(matches[0])]
+        words = m.group(1).strip().split()[:2]
+        return " ".join(words)
+    # Fallback: last word of the query
+    words = query.strip().split()
+    return words[-1] if words else ""
 
 
 # ── Reusable UI helpers ───────────────────────────────────────────────────────
@@ -705,17 +669,14 @@ app.clientside_callback(
 )
 def check_spelling(query: str, mode: str):
     hidden = "spell-banner spell-banner--hidden"
-    # Only check spelling in free-text mode
+    # Only active in free-text mode
     if mode not in (None, "freetext") or not query:
         return hidden, "", None
     location_text = _extract_location_hint(query)
-    if not location_text:
+    if not location_text or len(location_text) < 3:
         return hidden, "", None
-    try:
-        datasets, _ = load_datasets()
-        suggestion = _suggest_spelling(location_text, datasets.pincodes)
-    except Exception:
-        return hidden, "", None
+    # Delegate to OpenAI — same API key used throughout the app
+    suggestion = spell_check_location(location_text)
     if not suggestion:
         return hidden, "", None
     return (

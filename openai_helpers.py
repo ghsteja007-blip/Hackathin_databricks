@@ -216,6 +216,58 @@ def web_resolve_india_location(location: str) -> dict[str, Any] | None:
     }
 
 
+def spell_check_location(location_text: str) -> str | None:
+    """
+    Ask OpenAI to correct a misspelled Indian city / district / state name.
+
+    Returns the corrected place name if a misspelling is detected, or None if
+    the input already looks correct or the API is unavailable.
+
+    Uses the same OPENAI_API_KEY and OPENAI_MODEL env vars as the rest of the app,
+    both sourced from Databricks secrets via app.yaml.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or not location_text.strip():
+        return None
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+    except Exception:
+        return None
+
+    system = (
+        "You are an India geography spell-checker. "
+        "You know all Indian cities, districts, states, towns, and pin codes. "
+        "Only correct obvious misspellings of real Indian place names. "
+        "Never change a name that is already correct or that you are not confident about."
+    )
+    user_msg = (
+        f'The user typed this Indian place name: "{location_text.strip()}"\n\n'
+        "If it is misspelled, reply with ONLY the correctly spelled name "
+        "(nothing else — no punctuation, no explanation, no quotes).\n"
+        "If it is already correct, or if you are not sure, reply with exactly: CORRECT"
+    )
+
+    try:
+        response = client.responses.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            input=[
+                {"role": "developer", "content": system},
+                {"role": "user", "content": user_msg},
+            ],
+        )
+        result = (getattr(response, "output_text", "") or "").strip()
+        # Treat empty, "CORRECT", or unchanged input as no-suggestion
+        if not result or result.upper() == "CORRECT":
+            return None
+        if result.lower() == location_text.strip().lower():
+            return None
+        return result
+    except Exception:
+        return None
+
+
 def parse_referral_query(raw_query: str) -> ParsedReferralQuery:
     fallback = _fallback_parse(raw_query)
     try:
