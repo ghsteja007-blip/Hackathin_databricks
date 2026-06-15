@@ -1,0 +1,22 @@
+command: ["python", "app.py"]
+env:
+  - name: DATABRICKS_SCHEMA
+    value: "databricks_virtue_foundation_dataset_dais_2026"
+  - name: DATABRICKS_CATALOG
+    value: "main"
+  - name: FACILITIES_TABLE
+    value: "facilities"
+  - name: PINCODE_TABLE
+    value: "india_post_pincode_directory"
+  - name: NFHS_TABLE
+    value: "nfhs_5_district_health_indicators"
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql_warehouse
+  - name: OPENAI_API_KEY
+    valueFrom: openai_api_key
+  - name: OPENAI_MODEL
+    value: "gpt-5.5"
+  - name: ENABLE_WEB_RESOLUTION
+    value: "true"
+  - name: FACILITY_ROW_LIMIT
+    value: "50000"
