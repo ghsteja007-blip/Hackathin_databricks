@@ -466,6 +466,166 @@ button {
   font-size: 12px;
 }
 
+/* ── Search panel redesign ─────────────────────────────────────────────────── */
+
+.panel-heading {
+  margin: 0 0 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel-heading h2 {
+  margin: 0 0 3px;
+  font-size: 16px;
+  color: var(--ink);
+}
+
+.panel-heading p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ── Mode tabs ─────────────────────────────────────────────────────────────── */
+
+.mode-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.mode-tab {
+  flex: 1;
+  min-height: 40px;
+  padding: 6px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.mode-tab:hover:not(.mode-tab--active) {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  color: var(--ink);
+}
+
+.mode-tab--active {
+  border-color: var(--accent);
+  background: #f0fdfa;
+  color: var(--accent);
+}
+
+/* ── Mode panels ───────────────────────────────────────────────────────────── */
+
+.mode-panel {
+  margin-bottom: 6px;
+}
+
+.mode-panel--hidden {
+  display: none;
+}
+
+/* ── Input labels & hints ──────────────────────────────────────────────────── */
+
+.input-label {
+  display: block;
+  margin-bottom: 5px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.input-hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ── Pin code input ────────────────────────────────────────────────────────── */
+
+.pincode-input {
+  width: 100%;
+  height: 54px;
+  padding: 9px 14px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: var(--accent);
+  font-size: 24px;
+  font-weight: 700;
+  font-family: 'Courier New', Courier, monospace;
+  letter-spacing: 10px;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.pincode-input:focus {
+  border-color: var(--accent);
+  outline: 3px solid rgba(15, 118, 110, 0.15);
+  background: #ffffff;
+}
+
+.pincode-input::placeholder {
+  color: #cbd5e1;
+  letter-spacing: 6px;
+}
+
+/* ── Spell-correction banner ───────────────────────────────────────────────── */
+
+.spell-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 0 14px;
+  padding: 10px 14px;
+  background: #fefce8;
+  border: 1px solid #fde047;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #713f12;
+  animation: fadeIn 0.2s ease;
+}
+
+.spell-banner--hidden {
+  display: none;
+}
+
+.spell-banner-text {
+  flex: 1;
+  font-weight: 500;
+}
+
+.spell-apply-btn {
+  flex-shrink: 0;
+  min-height: 28px;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #ca8a04;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.spell-apply-btn:hover {
+  background: #a16207;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 @media (max-width: 1100px) {
   .workspace {
     grid-template-columns: 1fr;
