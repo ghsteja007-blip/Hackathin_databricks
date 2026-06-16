@@ -17,7 +17,13 @@ env:
   - name: OPENAI_API_KEY
     valueFrom: secret
   - name: OPENAI_MODEL
-    value: "gpt-5.5"
+    value: "gpt-4o"
+  - name: OPENAI_SPELL_MODEL
+    value: "gpt-4o-mini"
+  - name: OPENAI_CHAT_MODEL
+    value: "gpt-4o"
+  - name: OPENAI_SEARCH_MODEL
+    value: "gpt-4o"
   - name: ENABLE_WEB_RESOLUTION
     value: "true"
   - name: ENABLE_TILE_MAP
