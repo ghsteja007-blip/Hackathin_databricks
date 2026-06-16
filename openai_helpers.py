@@ -306,6 +306,9 @@ def _facility_for_prompt(item: dict[str, Any]) -> dict[str, Any]:
         "name": item.get("name"),
         "distance_km": item.get("distance_km"),
         "score": item.get("score"),
+        "base_score": item.get("base_score"),
+        "public_score_delta": item.get("public_score_delta"),
+        "public_signal": item.get("public_signal"),
         "facility_type": item.get("facility_type"),
         "operator_type": item.get("operator_type"),
         "city_state": item.get("city_state"),
@@ -316,6 +319,185 @@ def _facility_for_prompt(item: dict[str, Any]) -> dict[str, Any]:
         "matching_terms": list(dict.fromkeys(evidence_terms))[:12],
         "missing_or_suspicious": item.get("missing_or_suspicious", [])[:8],
     }
+
+
+def _public_signal_facility(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "candidate_id": item.get("candidate_id"),
+        "name": item.get("name"),
+        "city_state": item.get("city_state"),
+        "facility_type": item.get("facility_type"),
+        "phone": item.get("phone"),
+        "website": item.get("website"),
+        "source_urls": item.get("source_urls", [])[:2],
+        "distance_km": item.get("distance_km"),
+        "base_score": item.get("score"),
+        "raw_score": item.get("raw_score"),
+    }
+
+
+def _clean_public_signal(payload: dict[str, Any]) -> dict[str, Any]:
+    rating = payload.get("google_rating")
+    try:
+        rating = float(rating) if rating not in (None, "") else None
+    except (TypeError, ValueError):
+        rating = None
+    if rating is not None and not (0 <= rating <= 5):
+        rating = None
+
+    review_count = payload.get("google_review_count")
+    try:
+        review_count = int(float(review_count)) if review_count not in (None, "") else None
+    except (TypeError, ValueError):
+        review_count = None
+
+    themes = payload.get("review_themes") or []
+    if not isinstance(themes, list):
+        themes = []
+
+    source_urls = payload.get("source_urls") or []
+    if not isinstance(source_urls, list):
+        source_urls = []
+
+    notes = payload.get("notes") or ""
+    if isinstance(notes, list):
+        notes = "; ".join(str(item) for item in notes[:3])
+
+    return {
+        "candidate_id": str(payload.get("candidate_id") or ""),
+        "google_rating": rating,
+        "google_review_count": review_count,
+        "rating_source": str(payload.get("rating_source") or "public web"),
+        "rating_url": str(payload.get("rating_url") or ""),
+        "review_themes": [str(item).strip() for item in themes[:5] if str(item).strip()][:5],
+        "confidence": str(payload.get("confidence") or "unknown").lower(),
+        "source_urls": [str(url) for url in source_urls[:4] if url],
+        "notes": str(notes).strip(),
+    }
+
+
+def _public_rating_delta(signal: dict[str, Any]) -> float:
+    rating = signal.get("google_rating")
+    count = signal.get("google_review_count") or 0
+    if rating is None:
+        return 0.0
+
+    # Keep public reputation as a small 0-10 modifier, not a replacement for referral evidence.
+    confidence = min(1.0, max(0.35, count / 250 if count else 0.45))
+    delta = (float(rating) - 3.8) * 0.75 * confidence
+    return round(max(-0.6, min(0.9, delta)), 2)
+
+
+def enrich_candidate_public_signals(
+    candidates: list[dict[str, Any]],
+    care_need: str,
+    location_label: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """
+    Fetch public rating/review signals for the already-ranked shortlist in one web-search call.
+
+    These signals are used as a small score modifier and shown separately from
+    facility-record evidence. They are not treated as clinical evidence.
+    """
+    if os.getenv("ENABLE_PUBLIC_REVIEW_ENRICHMENT", "true").lower() not in {"1", "true", "yes", "on"}:
+        return candidates, None
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or not candidates:
+        return candidates, None
+
+    try:
+        limit = max(1, min(10, int(os.getenv("PUBLIC_REVIEW_ENRICHMENT_LIMIT", "8"))))
+    except ValueError:
+        limit = 8
+
+    facilities = [_public_signal_facility(item) for item in candidates[:limit]]
+    if not facilities:
+        return candidates, None
+
+    try:
+        client = _openai_client(api_key)
+    except Exception:
+        return candidates, "Public rating lookup skipped: OpenAI SDK unavailable."
+
+    system = (
+        "You enrich a healthcare referral shortlist with public web reputation signals. "
+        "Use web search to look up each listed Indian facility. Prefer Google Maps / Google Business Profile rating signals when visible in search results; "
+        "if not visible, use another clearly public rating source and mark the source. "
+        "Return only compact JSON. Do not include medical advice. Do not quote long reviews; summarize themes in your own words."
+    )
+    prompt = (
+        "Care need: "
+        f"{care_need or 'unspecified'}\n"
+        "Search location: "
+        f"{location_label or 'unspecified'}\n\n"
+        "Candidate facilities JSON:\n"
+        f"{json.dumps(facilities, ensure_ascii=False, indent=2)}\n\n"
+        "Return JSON exactly in this shape:\n"
+        "{\n"
+        '  "items": [\n'
+        "    {\n"
+        '      "candidate_id": "same candidate_id",\n'
+        '      "google_rating": 4.2,\n'
+        '      "google_review_count": 123,\n'
+        '      "rating_source": "Google Maps or another public source",\n'
+        '      "rating_url": "best public URL if available",\n'
+        '      "review_themes": ["short paraphrased theme", "short paraphrased theme"],\n'
+        '      "confidence": "high|medium|low|not_found",\n'
+        '      "source_urls": ["supporting URL"],\n'
+        '      "notes": "short uncertainty note"\n'
+        "    }\n"
+        "  ],\n"
+        '  "note": "overall lookup note"\n'
+        "}\n"
+        "If a facility cannot be confidently matched, set confidence to not_found and leave rating fields null."
+    )
+
+    try:
+        response = client.responses.create(
+            model=_model_for("OPENAI_REVIEW_MODEL", _model_for("OPENAI_SEARCH_MODEL")),
+            tools=[{"type": "web_search", "search_context_size": "low"}],
+            tool_choice="auto",
+            input=[
+                {"role": "developer", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        payload = _extract_json(getattr(response, "output_text", "") or "")
+    except Exception as exc:
+        return candidates, f"Public rating lookup skipped: {exc}"
+
+    items = payload.get("items") or []
+    if not isinstance(items, list):
+        return candidates, "Public rating lookup returned no structured items."
+
+    signals = {
+        signal["candidate_id"]: signal
+        for signal in (_clean_public_signal(item) for item in items if isinstance(item, dict))
+        if signal.get("candidate_id")
+    }
+
+    enriched = []
+    for candidate in candidates:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        signal = signals.get(candidate_id)
+        if not signal:
+            enriched.append(candidate)
+            continue
+        base_score = float(candidate.get("score") or 0)
+        delta = _public_rating_delta(signal)
+        updated = {
+            **candidate,
+            "base_score": round(base_score, 1),
+            "public_signal": signal,
+            "public_score_delta": delta,
+            "score": round(max(0.0, min(10.0, base_score + delta)), 1),
+        }
+        enriched.append(updated)
+
+    enriched.sort(key=lambda item: (-float(item.get("score") or 0), item.get("distance_km", 10**9), item.get("name")))
+    note = payload.get("note") or "Public ratings checked with one LLM web-search call."
+    return enriched, str(note)
 
 
 def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]]) -> dict[str, Any]:

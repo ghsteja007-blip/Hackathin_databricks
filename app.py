@@ -13,7 +13,12 @@ except Exception:
     dl = None
 
 from data_access import load_datasets
-from openai_helpers import ask_shortlist_copilot, parse_referral_query, spell_check_location
+from openai_helpers import (
+    ask_shortlist_copilot,
+    enrich_candidate_public_signals,
+    parse_referral_query,
+    spell_check_location,
+)
 from referral_engine import rank_facilities, resolve_location
 
 
@@ -107,6 +112,69 @@ def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
     return rendered
 
 
+def _rating_text(signal: dict[str, Any] | None) -> str:
+    if not signal:
+        return ""
+    rating = signal.get("google_rating")
+    count = signal.get("google_review_count")
+    if rating is None:
+        return ""
+    count_text = f" ({int(count):,} reviews)" if count else ""
+    source = signal.get("rating_source") or "public rating"
+    return f"{source}: {float(rating):.1f}/5{count_text}"
+
+
+def render_public_signal(candidate: dict[str, Any]) -> html.Div:
+    signal = candidate.get("public_signal") or {}
+    if not signal:
+        return html.Div(
+            className="public-signal public-signal-empty",
+            children=[
+                html.Div("Public review signal", className="section-label"),
+                chip("not checked or unavailable", "chip chip-soft"),
+            ],
+        )
+
+    rating = signal.get("google_rating")
+    count = signal.get("google_review_count")
+    confidence = signal.get("confidence") or "unknown"
+    themes = signal.get("review_themes") or []
+    delta = candidate.get("public_score_delta")
+    url = signal.get("rating_url") or (signal.get("source_urls") or [""])[0]
+
+    chips = []
+    if rating is not None:
+        chips.append(chip(f"rating {float(rating):.1f}/5", "chip chip-ok"))
+    if count:
+        chips.append(chip(f"{int(count):,} public reviews", "chip chip-soft"))
+    if delta not in (None, ""):
+        sign = "+" if float(delta) >= 0 else ""
+        chips.append(chip(f"{sign}{float(delta):.1f}/10 adjustment", "chip chip-soft"))
+    chips.append(chip(f"confidence: {confidence}", "chip chip-soft"))
+
+    return html.Div(
+        className="public-signal",
+        children=[
+            html.Div("Public review signal", className="section-label"),
+            html.Div(className="public-signal-chips", children=chips),
+            html.Div(
+                className="public-themes",
+                children=[chip(theme, "chip chip-soft") for theme in themes[:4]]
+                or [chip(signal.get("notes") or "No review themes found", "chip chip-warning")],
+            ),
+            html.A(
+                "Open public source",
+                href=url,
+                target="_blank",
+                rel="noreferrer",
+                className="chip chip-link public-source-link",
+            )
+            if url
+            else None,
+        ],
+    )
+
+
 def _env_enabled(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).lower() in {"1", "true", "yes", "on"}
 
@@ -134,18 +202,23 @@ def _candidate_points(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _score_color(score: Any) -> str:
     value = _safe_float(score) or 0
-    if value >= 85:
+    if value >= 8:
         return "#0f766e"
-    if value >= 65:
+    if value >= 6.5:
         return "#2563eb"
-    if value >= 45:
+    if value >= 4.5:
         return "#ca8a04"
     return "#64748b"
 
 
 def _score_radius(score: Any) -> int:
     value = _safe_float(score) or 0
-    return int(max(8, min(20, 8 + value / 8)))
+    return int(max(8, min(22, 8 + value * 1.2)))
+
+
+def _score_text(score: Any) -> str:
+    value = _safe_float(score)
+    return "n/a" if value is None else f"{value:.1f}/10"
 
 
 def _map_bounds(lats: list[float], lons: list[float]) -> list[list[float]]:
@@ -190,15 +263,19 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
         for item in candidate.get("evidence", [])[:3]:
             evidence_terms.extend(item.get("terms", [])[:3])
         evidence_label = ", ".join(dict.fromkeys(evidence_terms)) or "No direct evidence"
+        rating_label = _rating_text(candidate.get("public_signal"))
+        base_score = _safe_float(candidate.get("base_score"))
         hover_text.append(
             "<br>".join(
-                [
+                [line for line in [
                     f"<b>{candidate.get('name') or 'Unnamed facility'}</b>",
                     f"Distance: {candidate.get('distance_km', 0):.1f} km",
-                    f"Score: {candidate.get('score', 0):.0f}",
+                    f"Score: {_score_text(candidate.get('score'))}",
+                    f"Base score: {_score_text(base_score)}" if base_score is not None else "",
+                    rating_label,
                     f"Type: {candidate.get('facility_type') or 'facility'}",
                     f"Evidence: {evidence_label}",
-                ]
+                ] if line]
             )
         )
 
@@ -212,11 +289,13 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
             hovertext=hover_text,
             hoverinfo="text",
             marker={
-                "size": [max(10, min(26, 10 + score / 10)) for score in scores],
+                "size": [max(10, min(28, 10 + float(score or 0) * 1.7)) for score in scores],
                 "color": scores,
+                "cmin": 0,
+                "cmax": 10,
                 "colorscale": [[0, "#94a3b8"], [0.45, "#f59e0b"], [1, "#0f766e"]],
                 "line": {"width": 1, "color": "#ffffff"},
-                "colorbar": {"title": "Score", "thickness": 12},
+                "colorbar": {"title": "Score /10", "thickness": 12},
             },
             name="Candidate facilities",
             customdata=candidate_ids,
@@ -327,6 +406,7 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
         for item in candidate.get("evidence", [])[:3]:
             evidence_terms.extend(item.get("terms", [])[:3])
         evidence_label = ", ".join(dict.fromkeys(evidence_terms)) or "No direct evidence"
+        rating_label = _rating_text(candidate.get("public_signal"))
         color = _score_color(score)
 
         line_layers.append(
@@ -348,14 +428,15 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
                 fillColor=color,
                 fillOpacity=0.92,
                 children=[
-                    dl.Tooltip(f"#{idx} {name} - {float(distance or 0):.1f} km", sticky=True),
+                    dl.Tooltip(f"#{idx} {name} - {float(distance or 0):.1f} km - {_score_text(score)}", sticky=True),
                     dl.Popup(
                         html.Div(
                             className="leaflet-popup-content",
                             children=[
                                 html.Div(f"#{idx}", className="rank leaflet-rank"),
                                 html.Strong(name),
-                                html.Div(f"{float(distance or 0):.1f} km away - score {float(score or 0):.0f}"),
+                                html.Div(f"{float(distance or 0):.1f} km away - score {_score_text(score)}"),
+                                html.Div(rating_label, className="leaflet-rating") if rating_label else None,
                                 html.Div(candidate.get("facility_type") or "facility", className="muted"),
                                 html.Div(f"Evidence: {evidence_label}", className="leaflet-evidence"),
                             ],
@@ -399,6 +480,7 @@ def render_map_selection(candidate: dict[str, Any] | None = None) -> html.Div:
     for item in candidate.get("evidence", [])[:3]:
         evidence_terms.extend(item.get("terms", [])[:4])
     evidence_terms = list(dict.fromkeys(evidence_terms))
+    rating_label = _rating_text(candidate.get("public_signal"))
 
     return html.Div(
         className="map-selection-card",
@@ -409,7 +491,8 @@ def render_map_selection(candidate: dict[str, Any] | None = None) -> html.Div:
                 className="candidate-meta",
                 children=[
                     chip(f"{candidate.get('distance_km', 0):.1f} km"),
-                    chip(f"score {candidate.get('score', 0):.0f}"),
+                    chip(f"score {_score_text(candidate.get('score'))}"),
+                    chip(rating_label, "chip chip-ok") if rating_label else None,
                     chip(candidate.get("facility_type") or "facility"),
                 ],
             ),
@@ -426,6 +509,8 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
     suspicious = candidate.get("missing_or_suspicious") or []
     evidence = candidate.get("evidence") or []
     source_urls = candidate.get("source_urls") or []
+    has_public_signal = bool(candidate.get("public_signal"))
+    base_score = _safe_float(candidate.get("base_score"))
     contact_bits = []
 
     if candidate.get("phone"):
@@ -450,7 +535,10 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
                     html.Div([html.Div(f"#{rank}", className="rank"), html.H3(candidate.get("name") or "Unnamed facility")]),
                     html.Div(
                         className="score-stack",
-                        children=[html.Strong(f"{candidate.get('score', 0):.0f}"), html.Span("score")],
+                        children=[
+                            html.Strong(f"{(_safe_float(candidate.get('score')) or 0):.1f}"),
+                            html.Span("/10 adjusted" if has_public_signal else "/10 score"),
+                        ],
                     ),
                 ],
             ),
@@ -458,6 +546,10 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
                 className="candidate-meta",
                 children=[
                     chip(f"{candidate.get('distance_km', 0):.1f} km"),
+                    chip(f"base {_score_text(base_score)}", "chip chip-soft") if base_score is not None else None,
+                    chip(_rating_text(candidate.get("public_signal")), "chip chip-ok")
+                    if _rating_text(candidate.get("public_signal"))
+                    else None,
                     chip(candidate.get("facility_type") or "facility"),
                     chip(candidate.get("operator_type") or "operator unknown"),
                     chip(candidate.get("city_state") or "location unknown"),
@@ -465,6 +557,7 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
             ),
             html.Div(className="section-label", children="Matching evidence"),
             html.Div(className="evidence-list", children=render_evidence(evidence)),
+            render_public_signal(candidate) if candidate.get("public_signal") else None,
             html.Div(className="section-label warning-label", children="Missing or suspicious evidence"),
             html.Div(
                 className="warning-list",
@@ -540,7 +633,10 @@ def render_results(
                                         f"nearest: {nearest.get('name')} ({nearest.get('distance_km', 0):.1f} km)",
                                         "chip chip-soft",
                                     ),
-                                    chip(f"top score: {highest.get('name')}", "chip chip-soft"),
+                                    chip(
+                                        f"top score: {highest.get('name')} ({_score_text(highest.get('score'))})",
+                                        "chip chip-soft",
+                                    ),
                                 ],
                             ),
                             html.Div(id="map-selection-panel", children=render_map_selection(candidates[0])),
@@ -561,6 +657,16 @@ def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
     if not shortlist:
         return html.Div("No saved facilities yet.", className="muted")
 
+    def item_summary(item: dict[str, Any]) -> str:
+        base_score = _safe_float(item.get("base_score"))
+        parts = [
+            f"{item.get('distance_km', 0):.1f} km",
+            f"score {_score_text(item.get('score'))}",
+            f"base {_score_text(base_score)}" if base_score is not None else "",
+            _rating_text(item.get("public_signal")),
+        ]
+        return " - ".join(part for part in parts if part)
+
     return html.Div(
         className="shortlist-items",
         children=[
@@ -568,7 +674,7 @@ def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
                 className="shortlist-item",
                 children=[
                     html.Strong(item.get("name") or "Unnamed facility"),
-                    html.Span(f"{item.get('distance_km', 0):.1f} km - score {item.get('score', 0):.0f}"),
+                    html.Span(item_summary(item)),
                 ],
             )
             for item in shortlist
@@ -849,19 +955,6 @@ app.layout = html.Div(
                                     ],
                                 ),
                                 html.Div(
-                                    className="chat-thread-shell",
-                                    children=dcc.Loading(
-                                        id="chat-loading",
-                                        type="dot",
-                                        color="#0f766e",
-                                        children=html.Div(
-                                            id="chat-history",
-                                            className="chat-thread",
-                                            children=render_chat_history([]),
-                                        ),
-                                    ),
-                                ),
-                                html.Div(
                                     className="chat-composer",
                                     children=[
                                         dcc.Textarea(
@@ -883,6 +976,19 @@ app.layout = html.Div(
                                             ],
                                         ),
                                     ],
+                                ),
+                                html.Div(
+                                    className="chat-thread-shell",
+                                    children=dcc.Loading(
+                                        id="chat-loading",
+                                        type="dot",
+                                        color="#0f766e",
+                                        children=html.Div(
+                                            id="chat-history",
+                                            className="chat-thread",
+                                            children=render_chat_history([]),
+                                        ),
+                                    ),
                                 ),
                             ],
                         ),
@@ -1207,6 +1313,14 @@ def run_search(
             radius_km=float(radius_km or 250),
             limit=int(limit or 8),
         )
+        if candidates:
+            candidates, public_note = enrich_candidate_public_signals(
+                candidates,
+                care_need=parsed.care_need,
+                location_label=location.get("label") or parsed.location,
+            )
+            if public_note:
+                data_notes = data_notes + [f"Public review signal: {public_note}"]
 
         parsed_dict = parsed.to_dict()
         return (
@@ -1346,6 +1460,9 @@ def download_shortlist(n_clicks, shortlist):
                 "name": item.get("name"),
                 "distance_km": item.get("distance_km"),
                 "score": item.get("score"),
+                "base_score": item.get("base_score"),
+                "public_score_delta": item.get("public_score_delta"),
+                "public_signal": json.dumps(item.get("public_signal", {}), ensure_ascii=False),
                 "facility_type": item.get("facility_type"),
                 "operator_type": item.get("operator_type"),
                 "city_state": item.get("city_state"),
