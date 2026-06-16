@@ -245,7 +245,7 @@ def spell_check_location(location_text: str) -> str | None:
     user_msg = (
         f'The user typed this Indian place name: "{location_text.strip()}"\n\n'
         "If it is misspelled, reply with ONLY the correctly spelled name "
-        "(nothing else — no punctuation, no explanation, no quotes).\n"
+        "(nothing else - no punctuation, no explanation, no quotes).\n"
         "If it is already correct, or if you are not sure, reply with exactly: CORRECT"
     )
 
