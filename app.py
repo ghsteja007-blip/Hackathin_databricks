@@ -115,12 +115,25 @@ def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
 def _rating_text(signal: dict[str, Any] | None) -> str:
     if not signal:
         return ""
-    rating = signal.get("google_rating")
-    count = signal.get("google_review_count")
+    rating = signal.get("justdial_rating")
+    count = signal.get("justdial_review_count")
     if rating is None:
         return ""
     count_text = f" ({int(count):,} reviews)" if count else ""
-    return f"Google overall: {float(rating):.1f}/5{count_text}"
+    return f"Justdial: {float(rating):.1f}/5{count_text}"
+
+
+def _is_http_url(url: Any) -> bool:
+    text = str(url or "").strip()
+    return text.startswith("http://") or text.startswith("https://")
+
+
+def _first_http_url(values: list[Any] | None) -> str:
+    for value in values or []:
+        text = str(value or "").strip()
+        if _is_http_url(text):
+            return text
+    return ""
 
 
 def render_public_signal(candidate: dict[str, Any]) -> html.Div:
@@ -129,23 +142,23 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
         return html.Div(
             className="public-signal public-signal-empty",
             children=[
-                html.Div("Overall Google rating", className="section-label"),
+                html.Div("Justdial rating", className="section-label"),
                 chip("not checked or unavailable", "chip chip-soft"),
             ],
         )
 
-    rating = signal.get("google_rating")
-    count = signal.get("google_review_count")
+    rating = signal.get("justdial_rating")
+    count = signal.get("justdial_review_count")
     confidence = signal.get("confidence") or "unknown"
     themes = signal.get("review_themes") or []
     delta = candidate.get("public_score_delta")
-    url = signal.get("rating_url") or (signal.get("source_urls") or [""])[0]
+    url = signal.get("justdial_url") if _is_http_url(signal.get("justdial_url")) else _first_http_url(signal.get("source_urls"))
 
     chips = []
     if rating is not None:
-        chips.append(chip(f"Google overall {float(rating):.1f}/5", "chip chip-ok"))
+        chips.append(chip(f"Justdial {float(rating):.1f}/5", "chip chip-ok"))
     if count:
-        chips.append(chip(f"{int(count):,} Google reviews", "chip chip-soft"))
+        chips.append(chip(f"{int(count):,} Justdial reviews", "chip chip-soft"))
     if delta not in (None, ""):
         sign = "+" if float(delta) >= 0 else ""
         chips.append(chip(f"{sign}{float(delta):.1f}/10 adjustment", "chip chip-soft"))
@@ -154,7 +167,7 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
     return html.Div(
         className="public-signal",
         children=[
-            html.Div("Overall Google rating", className="section-label"),
+            html.Div("Justdial rating", className="section-label"),
             html.Div(className="public-signal-chips", children=chips),
             html.Div(
                 className="public-themes",
@@ -162,7 +175,7 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
                 or [chip(signal.get("notes") or "No review themes found", "chip chip-warning")],
             ),
             html.A(
-                "Open Google source",
+                "Open Justdial source",
                 href=url,
                 target="_blank",
                 rel="noreferrer",
@@ -514,8 +527,12 @@ def render_map_selection(candidate: dict[str, Any] | None = None) -> html.Div:
 def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
     suspicious = candidate.get("missing_or_suspicious") or []
     evidence = candidate.get("evidence") or []
-    source_urls = candidate.get("source_urls") or []
-    has_public_signal = bool(candidate.get("public_signal"))
+    signal = candidate.get("public_signal") or {}
+    justdial_url = signal.get("justdial_url") if _is_http_url(signal.get("justdial_url")) else ""
+    source_url = justdial_url or _first_http_url(candidate.get("source_urls") or [])
+    website_url = str(candidate.get("website") or "").strip()
+    source_label = "Justdial source" if justdial_url else "Source"
+    has_public_signal = bool(signal)
     base_score = _safe_float(candidate.get("base_score"))
     contact_bits = []
 
@@ -523,13 +540,15 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
         contact_bits.append(chip(candidate["phone"], "chip chip-soft"))
     if candidate.get("email"):
         contact_bits.append(chip(candidate["email"], "chip chip-soft"))
-    if candidate.get("website"):
+    if _is_http_url(website_url):
         contact_bits.append(
-            html.A("Website", href=candidate["website"], target="_blank", rel="noreferrer", className="chip chip-link")
+            html.A("Website", href=website_url, target="_blank", rel="noreferrer", className="chip chip-link")
         )
-    if source_urls:
+    else:
+        contact_bits.append(chip("Website unavailable", "chip chip-soft chip-disabled"))
+    if source_url:
         contact_bits.append(
-            html.A("Source", href=source_urls[0], target="_blank", rel="noreferrer", className="chip chip-link")
+            html.A(source_label, href=source_url, target="_blank", rel="noreferrer", className="chip chip-link")
         )
 
     return html.Article(
@@ -894,27 +913,39 @@ app.layout = html.Div(
                             className="controls-row",
                             children=[
                                 html.Div([
-                                    html.Label("Radius km", htmlFor="radius-input"),
-                                    dcc.Input(
+                                    html.Label("Search radius km", htmlFor="radius-input"),
+                                    dcc.Dropdown(
                                         id="radius-input",
-                                        type="number",
-                                        min=10,
-                                        max=1000,
-                                        step=10,
                                         value=250,
-                                        className="number-input",
+                                        options=[
+                                            {"label": "25 km", "value": 25},
+                                            {"label": "50 km", "value": 50},
+                                            {"label": "100 km", "value": 100},
+                                            {"label": "250 km", "value": 250},
+                                            {"label": "500 km", "value": 500},
+                                            {"label": "1000 km", "value": 1000},
+                                        ],
+                                        clearable=False,
+                                        searchable=False,
+                                        className="select-input",
                                     ),
                                 ]),
                                 html.Div([
-                                    html.Label("Results", htmlFor="limit-input"),
-                                    dcc.Input(
+                                    html.Label("Max results", htmlFor="limit-input"),
+                                    dcc.Dropdown(
                                         id="limit-input",
-                                        type="number",
-                                        min=3,
-                                        max=25,
-                                        step=1,
                                         value=8,
-                                        className="number-input",
+                                        options=[
+                                            {"label": "5", "value": 5},
+                                            {"label": "8", "value": 8},
+                                            {"label": "10", "value": 10},
+                                            {"label": "15", "value": 15},
+                                            {"label": "20", "value": 20},
+                                            {"label": "25", "value": 25},
+                                        ],
+                                        clearable=False,
+                                        searchable=False,
+                                        className="select-input",
                                     ),
                                 ]),
                             ],
@@ -1209,6 +1240,17 @@ def run_search(
     try:
         datasets, data_notes = load_datasets()
         correction_note = ""
+        try:
+            radius_value = float(radius_km if radius_km not in (None, "") else 250)
+        except (TypeError, ValueError):
+            radius_value = 250.0
+        radius_value = max(1.0, min(1000.0, radius_value))
+
+        try:
+            limit_value = int(limit if limit not in (None, "") else 8)
+        except (TypeError, ValueError):
+            limit_value = 8
+        limit_value = max(1, min(25, limit_value))
 
         # Resolve parsed need and location per mode.
         if mode == "freetext":
@@ -1316,8 +1358,8 @@ def run_search(
             datasets.facilities,
             location=location,
             parsed_need=parsed,
-            radius_km=float(radius_km or 250),
-            limit=int(limit or 8),
+            radius_km=radius_value,
+            limit=limit_value,
         )
         if candidates:
             candidates, public_note = enrich_candidate_public_signals(
@@ -1326,13 +1368,16 @@ def run_search(
                 location_label=location.get("label") or parsed.location,
             )
             if public_note:
-                data_notes = data_notes + [f"Google rating signal: {public_note}"]
+                data_notes = data_notes + [f"Justdial rating signal: {public_note}"]
 
         parsed_dict = parsed.to_dict()
         return (
             render_results(parsed_dict, location, candidates, data_notes),
             candidates,
-            f"Found {len(candidates)} candidates using {parsed.source} parsing. {correction_note}".strip(),
+            (
+                f"Found {len(candidates)} candidates within {radius_value:g} km "
+                f"(showing up to {limit_value}) using {parsed.source} parsing. {correction_note}"
+            ).strip(),
         )
 
     except Exception as exc:
@@ -1461,6 +1506,7 @@ def download_shortlist(n_clicks, shortlist):
     shortlist = shortlist or []
     rows = []
     for item in shortlist:
+        signal = item.get("public_signal") or {}
         rows.append(
             {
                 "name": item.get("name"),
@@ -1468,6 +1514,10 @@ def download_shortlist(n_clicks, shortlist):
                 "score": item.get("score"),
                 "base_score": item.get("base_score"),
                 "public_score_delta": item.get("public_score_delta"),
+                "justdial_rating": signal.get("justdial_rating"),
+                "justdial_review_count": signal.get("justdial_review_count"),
+                "justdial_url": signal.get("justdial_url"),
+                "official_website_url": signal.get("official_website_url"),
                 "public_signal": json.dumps(item.get("public_signal", {}), ensure_ascii=False),
                 "facility_type": item.get("facility_type"),
                 "operator_type": item.get("operator_type"),
@@ -1475,6 +1525,7 @@ def download_shortlist(n_clicks, shortlist):
                 "phone": item.get("phone"),
                 "email": item.get("email"),
                 "website": item.get("website"),
+                "source_urls": json.dumps(item.get("source_urls", []), ensure_ascii=False),
                 "evidence": json.dumps(item.get("evidence", []), ensure_ascii=False),
                 "missing_or_suspicious": json.dumps(item.get("missing_or_suspicious", []), ensure_ascii=False),
             }

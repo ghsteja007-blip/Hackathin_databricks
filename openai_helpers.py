@@ -336,8 +336,22 @@ def _public_signal_facility(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_http_url(url: Any) -> bool:
+    text = str(url or "").strip()
+    return text.startswith("http://") or text.startswith("https://")
+
+
+def _dedupe_urls(urls: list[Any]) -> list[str]:
+    cleaned = []
+    for url in urls:
+        text = str(url or "").strip()
+        if _is_http_url(text) and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
 def _clean_public_signal(payload: dict[str, Any]) -> dict[str, Any]:
-    rating = payload.get("google_rating")
+    rating = payload.get("justdial_rating")
     try:
         rating = float(rating) if rating not in (None, "") else None
     except (TypeError, ValueError):
@@ -345,7 +359,7 @@ def _clean_public_signal(payload: dict[str, Any]) -> dict[str, Any]:
     if rating is not None and not (0 <= rating <= 5):
         rating = None
 
-    review_count = payload.get("google_review_count")
+    review_count = payload.get("justdial_review_count")
     try:
         review_count = int(float(review_count)) if review_count not in (None, "") else None
     except (TypeError, ValueError):
@@ -365,27 +379,28 @@ def _clean_public_signal(payload: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "candidate_id": str(payload.get("candidate_id") or ""),
-        "google_rating": rating,
-        "google_review_count": review_count,
-        "rating_source": str(payload.get("rating_source") or "Google Maps"),
-        "rating_url": str(payload.get("rating_url") or payload.get("google_maps_url") or ""),
+        "justdial_rating": rating,
+        "justdial_review_count": review_count,
+        "rating_source": "Justdial",
+        "justdial_url": str(payload.get("justdial_url") or payload.get("rating_url") or ""),
+        "official_website_url": str(payload.get("official_website_url") or ""),
         "review_themes": [str(item).strip() for item in themes[:5] if str(item).strip()][:5],
         "confidence": str(payload.get("confidence") or "unknown").lower(),
-        "source_urls": [str(url) for url in source_urls[:4] if url],
+        "source_urls": _dedupe_urls(source_urls[:4]),
         "notes": str(notes).strip(),
     }
 
 
 def _public_rating_delta(signal: dict[str, Any]) -> float:
-    rating = signal.get("google_rating")
-    count = signal.get("google_review_count") or 0
+    rating = signal.get("justdial_rating")
+    count = signal.get("justdial_review_count") or 0
     if rating is None:
         return 0.0
 
     # Public reputation is a meaningful 0-10 modifier, but still not a replacement for referral evidence.
     confidence = min(1.0, max(0.35, count / 250 if count else 0.45))
-    delta = ((float(rating) - 3.5) / 1.5) * 2.0 * confidence
-    return round(max(-1.5, min(2.0, delta)), 2)
+    delta = ((float(rating) - 3.4) / 1.6) * 2.5 * confidence
+    return round(max(-2.0, min(2.5, delta)), 2)
 
 
 def enrich_candidate_public_signals(
@@ -407,7 +422,7 @@ def enrich_candidate_public_signals(
         return candidates, None
 
     try:
-        limit = max(1, min(10, int(os.getenv("PUBLIC_REVIEW_ENRICHMENT_LIMIT", "8"))))
+        limit = max(1, min(25, int(os.getenv("PUBLIC_REVIEW_ENRICHMENT_LIMIT", "25"))))
     except ValueError:
         limit = 8
 
@@ -421,9 +436,10 @@ def enrich_candidate_public_signals(
         return candidates, "Public rating lookup skipped: OpenAI SDK unavailable."
 
     system = (
-        "You enrich a healthcare referral shortlist with public Google reputation signals. "
-        "Use web search to look up each listed Indian facility. The google_rating field must be the overall Google Maps / Google Business Profile rating, not an inferred rating and not another site's rating. "
-        "If the overall Google rating is not confidently visible, set google_rating and google_review_count to null and confidence to not_found. "
+        "You enrich a healthcare referral shortlist with Justdial reputation signals and official website links. "
+        "Use web search to look up each listed Indian facility. The justdial_rating field must be the overall Justdial rating for that facility, not Google, Practo, Facebook, or inferred sentiment. "
+        "Also find the hospital's own official website URL when one is confidently available; do not use Justdial, Practo, Facebook, Instagram, or directory pages as official_website_url. "
+        "If the Justdial listing cannot be confidently matched, set justdial_rating and justdial_review_count to null and confidence to not_found. "
         "Return only compact JSON. Do not include medical advice. Do not quote long reviews; summarize review themes in your own words."
     )
     prompt = (
@@ -438,19 +454,19 @@ def enrich_candidate_public_signals(
         '  "items": [\n'
         "    {\n"
         '      "candidate_id": "same candidate_id",\n'
-        '      "google_rating": 4.2,\n'
-        '      "google_review_count": 123,\n'
-        '      "rating_source": "Google Maps",\n'
-        '      "rating_url": "Google Maps or Google Business Profile URL if available",\n'
+        '      "justdial_rating": 4.2,\n'
+        '      "justdial_review_count": 123,\n'
+        '      "justdial_url": "Justdial listing URL if available",\n'
+        '      "official_website_url": "hospital official website URL if available",\n'
         '      "review_themes": ["short paraphrased theme", "short paraphrased theme"],\n'
         '      "confidence": "high|medium|low|not_found",\n'
-        '      "source_urls": ["supporting URL"],\n'
+        '      "source_urls": ["supporting URL such as Justdial or official site"],\n'
         '      "notes": "short uncertainty note"\n'
         "    }\n"
         "  ],\n"
         '  "note": "overall lookup note"\n'
         "}\n"
-        "If a facility cannot be confidently matched to a Google listing, set confidence to not_found and leave Google rating fields null. Do not substitute ratings from Practo, Justdial, Facebook, hospital websites, or other sources into google_rating."
+        "If a facility cannot be confidently matched to a Justdial listing, set confidence to not_found and leave Justdial rating fields null. Do not substitute Google, Practo, Facebook, hospital website, or other ratings into justdial_rating."
     )
 
     try:
@@ -484,19 +500,28 @@ def enrich_candidate_public_signals(
         if not signal:
             enriched.append(candidate)
             continue
-        base_score = float(candidate.get("score") or 0)
+        base_score = max(0.0, min(10.0, float(candidate.get("score") or 0)))
         delta = _public_rating_delta(signal)
+        official_website = signal.get("official_website_url") if _is_http_url(signal.get("official_website_url")) else ""
+        merged_source_urls = _dedupe_urls(
+            [signal.get("justdial_url")]
+            + list(candidate.get("source_urls") or [])
+            + [signal.get("official_website_url")]
+            + list(signal.get("source_urls") or [])
+        )
         updated = {
             **candidate,
             "base_score": round(base_score, 1),
             "public_signal": signal,
             "public_score_delta": delta,
             "score": round(max(0.0, min(10.0, base_score + delta)), 1),
+            "website": official_website or candidate.get("website") or "",
+            "source_urls": merged_source_urls,
         }
         enriched.append(updated)
 
     enriched.sort(key=lambda item: (-float(item.get("score") or 0), item.get("distance_km", 10**9), item.get("name")))
-    note = payload.get("note") or "Public ratings checked with one LLM web-search call."
+    note = payload.get("note") or "Justdial ratings and official website links checked with one LLM web-search call."
     return enriched, str(note)
 
 

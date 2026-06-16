@@ -25,7 +25,7 @@ env:
   - name: OPENAI_SEARCH_MODEL
     value: "gpt-4o"
   - name: OPENAI_TIMEOUT_SECONDS
-    value: "12"
+    value: "20"
   - name: ENABLE_WEB_RESOLUTION
     value: "true"
   - name: OPENAI_REVIEW_MODEL
@@ -33,7 +33,7 @@ env:
   - name: ENABLE_PUBLIC_REVIEW_ENRICHMENT
     value: "true"
   - name: PUBLIC_REVIEW_ENRICHMENT_LIMIT
-    value: "8"
+    value: "25"
   - name: ENABLE_LEAFLET_MAP
     value: "true"
   - name: LEAFLET_TILE_URL
