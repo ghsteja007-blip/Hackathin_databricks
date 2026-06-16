@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 from typing import Any
@@ -7,7 +8,7 @@ from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 import plotly.graph_objects as go
 
 from data_access import load_datasets
-from openai_helpers import parse_referral_query, spell_check_location
+from openai_helpers import ask_shortlist_copilot, parse_referral_query, spell_check_location
 from referral_engine import rank_facilities, resolve_location
 
 
@@ -74,30 +75,52 @@ def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
     return rendered
 
 
-# go.Scattermap  (Plotly >= 5.24) uses bundled Leaflet, no WebGL or CDN.
-# go.Scattermapbox needs Mapbox GL JS/CDN/WebGL and can render blank in apps.
-# go.Scattergeo  is always present and has zero external tile dependencies.
-#
-# We deliberately skip Scattermapbox: if Scattermap isn't available we fall
-# straight to Scattergeo so the map always renders something.
-_SCATTER_MAP_CLS = getattr(go, "Scattermap", None)   # None when Plotly < 5.24
+_SCATTER_MAP_CLS = getattr(go, "Scattermap", None)
 _USE_TILE_MAP = (
     _SCATTER_MAP_CLS is not None
     and os.getenv("ENABLE_TILE_MAP", "false").lower() in {"1", "true", "yes", "on"}
 )
 
 
+def _finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _axis_range(values: list[float], minimum_span: float = 0.35) -> list[float]:
+    low = min(values)
+    high = max(values)
+    span = max(high - low, minimum_span)
+    pad = max(span * 0.22, minimum_span / 2)
+    return [low - pad, high + pad]
+
+
 def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> dcc.Graph:
-    lats = [c.get("latitude") for c in candidates]
-    lons = [c.get("longitude") for c in candidates]
-    names = [c.get("name") for c in candidates]
-    scores = [c.get("score", 0) for c in candidates]
-    distances = [c.get("distance_km", 0) for c in candidates]
-    candidate_ids = [c.get("candidate_id") for c in candidates]
+    mapped_candidates = []
+    for c in candidates:
+        lat = _finite_float(c.get("latitude"))
+        lon = _finite_float(c.get("longitude"))
+        if lat is None or lon is None:
+            continue
+        mapped_candidates.append({**c, "_lat": lat, "_lon": lon})
+
+    origin_lat = _finite_float(location.get("latitude"))
+    origin_lon = _finite_float(location.get("longitude"))
+    if origin_lat is None or origin_lon is None:
+        origin_lat = mapped_candidates[0]["_lat"] if mapped_candidates else 22.9734
+        origin_lon = mapped_candidates[0]["_lon"] if mapped_candidates else 78.6569
+
+    lats = [c["_lat"] for c in mapped_candidates]
+    lons = [c["_lon"] for c in mapped_candidates]
+    scores = [c.get("score", 0) for c in mapped_candidates]
+    candidate_ids = [c.get("candidate_id") for c in mapped_candidates]
 
     # Hover tooltips
     hover_text = []
-    for c in candidates:
+    for c in mapped_candidates:
         evidence_terms: list[str] = []
         for item in c.get("evidence", [])[:3]:
             evidence_terms.extend(item.get("terms", [])[:3])
@@ -114,9 +137,8 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             )
         )
 
-    # Auto-zoom and center shared by both renderers.
-    all_lats = [float(v) for v in lats + [location.get("latitude")] if v is not None]
-    all_lons = [float(v) for v in lons + [location.get("longitude")] if v is not None]
+    all_lats = lats + [origin_lat]
+    all_lons = lons + [origin_lon]
     center_lat = sum(all_lats) / len(all_lats)
     center_lon = sum(all_lons) / len(all_lons)
     span = max(max(all_lats) - min(all_lats), max(all_lons) - min(all_lons), 0.05)
@@ -160,7 +182,7 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
                 lat=lats,
                 lon=lons,
                 mode="markers+text",
-                text=[str(i + 1) for i in range(len(candidates))],
+                text=[str(i + 1) for i in range(len(mapped_candidates))],
                 textposition="middle center",
                 textfont={"size": 11, "color": "#ffffff"},
                 hovertext=hover_text,
@@ -178,8 +200,8 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
         )
         fig.add_trace(
             _SCATTER_MAP_CLS(
-                lat=[location.get("latitude")],
-                lon=[location.get("longitude")],
+                lat=[origin_lat],
+                lon=[origin_lon],
                 mode="markers+text",
                 text=[f"  {origin_label}"],
                 textposition="middle right",
@@ -207,20 +229,34 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
         )
 
     else:
-        # go.Scattergeo fallback (always available, vector outline).
-        projection_scale = max(2.5, min(18, 15 / max(span, 1.0)))
+        line_x: list[float | None] = []
+        line_y: list[float | None] = []
+        for c in mapped_candidates[:12]:
+            line_x.extend([origin_lon, c["_lon"], None])
+            line_y.extend([origin_lat, c["_lat"], None])
+
         fig.add_trace(
-            go.Scattergeo(
-                lat=lats,
-                lon=lons,
+            go.Scatter(
+                x=line_x,
+                y=line_y,
+                mode="lines",
+                line={"color": "rgba(15, 118, 110, 0.28)", "width": 1.5},
+                hoverinfo="skip",
+                name="Referral paths",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=lons,
+                y=lats,
                 mode="markers+text",
-                text=[str(i + 1) for i in range(len(candidates))],
+                text=[str(i + 1) for i in range(len(mapped_candidates))],
                 textposition="middle center",
-                textfont={"size": 10, "color": "#ffffff"},
+                textfont={"size": 11, "color": "#ffffff"},
                 hovertext=hover_text,
                 hoverinfo="text",
                 marker={
-                    "size": [max(10, min(26, 10 + s / 10)) for s in scores],
+                    "size": [max(18, min(36, 18 + float(s or 0) / 8)) for s in scores],
                     "color": scores,
                     "colorscale": marker_colorscale,
                     "line": {"width": 1, "color": "#ffffff"},
@@ -231,32 +267,56 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             )
         )
         fig.add_trace(
-            go.Scattergeo(
-                lat=[location.get("latitude")],
-                lon=[location.get("longitude")],
+            go.Scatter(
+                x=[origin_lon],
+                y=[origin_lat],
                 mode="markers+text",
-                text=["Search origin"],
-                textposition="bottom center",
+                text=["Origin"],
+                textposition="top center",
+                textfont={"size": 12, "color": "#7f1d1d"},
                 hovertext=[origin_hover],
                 hoverinfo="text",
-                marker={"size": 16, "color": "#b91c1c", "symbol": "star", "line": {"width": 1, "color": "#ffffff"}},
+                marker={"size": 22, "color": "#b91c1c", "symbol": "star", "line": {"width": 1, "color": "#ffffff"}},
                 name="Search origin",
             )
         )
         fig.update_layout(
-            margin={"l": 0, "r": 0, "t": 0, "b": 0},
+            margin={"l": 8, "r": 8, "t": 8, "b": 8},
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             showlegend=False,
-            geo={
-                "scope": "asia",
-                "center": {"lat": center_lat, "lon": center_lon},
-                "projection": {"type": "mercator", "scale": projection_scale},
-                "showland": True, "landcolor": "#f8fafc",
-                "showocean": True, "oceancolor": "#e0f2fe",
-                "showcountries": True, "countrycolor": "#cbd5e1",
-                "showsubunits": True, "subunitcolor": "#e2e8f0",
-                "fitbounds": "locations",
+            hoverlabel={
+                "bgcolor": "#1e293b",
+                "bordercolor": "#334155",
+                "font": {"color": "#f8fafc", "size": 13},
+            },
+            annotations=[
+                {
+                    "text": "Offline-safe coordinate map",
+                    "xref": "paper",
+                    "yref": "paper",
+                    "x": 0.01,
+                    "y": 0.99,
+                    "showarrow": False,
+                    "font": {"size": 11, "color": "#64748b"},
+                    "align": "left",
+                }
+            ],
+            xaxis={
+                "title": "Longitude",
+                "range": _axis_range(all_lons),
+                "showgrid": True,
+                "gridcolor": "rgba(100,116,139,0.18)",
+                "zeroline": False,
+            },
+            yaxis={
+                "title": "Latitude",
+                "range": _axis_range(all_lats),
+                "showgrid": True,
+                "gridcolor": "rgba(100,116,139,0.18)",
+                "zeroline": False,
+                "scaleanchor": "x",
+                "scaleratio": 1,
             },
         )
 
@@ -406,7 +466,10 @@ def render_results(
                 children=[
                     html.Div(
                         className="map-header",
-                        children=[html.H2("Referral Map"), html.Span("Drag, zoom, and hover markers for facility evidence.")],
+                        children=[
+                            html.H2("Referral Map"),
+                            html.Span("Offline-safe map: numbered candidates, route lines, hover evidence, click inspection."),
+                        ],
                     ),
                     render_candidate_map(location, candidates),
                     html.Div(
@@ -456,6 +519,38 @@ def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
     )
 
 
+def render_chat_history(history: list[dict[str, Any]] | None) -> html.Div:
+    history = history or []
+    if not history:
+        return html.Div(
+            className="chat-empty",
+            children=[
+                html.Strong("Shortlist copilot"),
+                html.Span("Save hospitals, then ask about tradeoffs, gaps, contact checks, or what to verify next."),
+            ],
+        )
+
+    return html.Div(
+        className="chat-thread-inner",
+        children=[
+            html.Div(
+                className=f"chat-message chat-message-{message.get('role', 'assistant')}",
+                children=[
+                    html.Div(
+                        className="chat-meta",
+                        children=[
+                            html.Span("You" if message.get("role") == "user" else "Copilot"),
+                            chip("web checked", "chip chip-ok") if message.get("used_search") else None,
+                        ],
+                    ),
+                    dcc.Markdown(message.get("content") or "", className="chat-markdown", link_target="_blank"),
+                ],
+            )
+            for message in history[-8:]
+        ],
+    )
+
+
 # Layout
 app.layout = html.Div(
     id="app-root",
@@ -467,6 +562,7 @@ app.layout = html.Div(
         dcc.Store(id="search-mode-store", data="freetext"),
         dcc.Store(id="spell-suggestion-store", data=None),
         dcc.Store(id="theme-store", data="light"),
+        dcc.Store(id="chat-history-store", data=[]),
         dcc.Download(id="shortlist-download"),
         html.Header(
             className="app-header",
@@ -672,6 +768,27 @@ app.layout = html.Div(
                         ),
                         html.Div(id="shortlist-panel-body", children=render_shortlist([])),
                         html.Button("Download CSV", id="download-shortlist", className="secondary-button full-width"),
+                        html.Div(
+                            className="chat-panel",
+                            children=[
+                                html.Div(
+                                    className="chat-heading",
+                                    children=[
+                                        html.H2("Ask Copilot"),
+                                        html.P("Use saved facilities plus web search when fresh details matter."),
+                                    ],
+                                ),
+                                html.Div(id="chat-history", className="chat-thread", children=render_chat_history([])),
+                                dcc.Textarea(
+                                    id="chat-input",
+                                    className="chat-input",
+                                    placeholder="Compare my shortlist, check what evidence is missing, or look up current details...",
+                                    value="",
+                                ),
+                                html.Button("Ask", id="chat-submit", className="primary-button chat-submit", n_clicks=0),
+                                html.Div(id="chat-status", className="chat-status"),
+                            ],
+                        ),
                     ],
                 ),
             ],
@@ -872,9 +989,20 @@ def run_search(
             raw_query = (query or "").strip()
             if not raw_query:
                 return render_empty_state(), [], "Enter a care need and location."
+
+            location_hint = _extract_location_hint(raw_query)
+            if location_hint and len(location_hint) >= 3:
+                suggestion = spell_check_location(location_hint)
+                if suggestion:
+                    corrected_query = re.sub(re.escape(location_hint), suggestion, raw_query, count=1, flags=re.IGNORECASE)
+                    if corrected_query != raw_query:
+                        raw_query = corrected_query
+                        correction_note = f'Autocorrected location to "{suggestion}".'
+                        data_notes = data_notes + [f"LLM location autocorrection applied: {suggestion}"]
+
             parsed = parse_referral_query(raw_query)
             location = resolve_location(parsed.location, datasets.facilities, datasets.pincodes)
-            if (not location.get("latitude") or not location.get("longitude")) and parsed.location:
+            if (not correction_note) and (not location.get("latitude") or not location.get("longitude")) and parsed.location:
                 suggestion = spell_check_location(parsed.location)
                 if suggestion:
                     corrected_query = re.sub(re.escape(parsed.location), suggestion, raw_query, flags=re.IGNORECASE)
@@ -1029,6 +1157,41 @@ def update_shortlist(save_clicks, clear_clicks, candidates, shortlist):
         shortlist = shortlist + [candidate]
 
     return shortlist, render_shortlist(shortlist)
+
+
+@app.callback(
+    Output("chat-history-store", "data"),
+    Output("chat-history", "children"),
+    Output("chat-input", "value"),
+    Output("chat-status", "children"),
+    Input("chat-submit", "n_clicks"),
+    State("chat-input", "value"),
+    State("shortlist-store", "data"),
+    State("chat-history-store", "data"),
+    prevent_initial_call=True,
+)
+def ask_copilot(n_clicks, question, shortlist, history):
+    question = (question or "").strip()
+    history = history or []
+    shortlist = shortlist or []
+
+    if not question:
+        return no_update, no_update, no_update, "Ask a question about the saved shortlist."
+
+    user_message = {"role": "user", "content": question}
+    result = ask_shortlist_copilot(question, shortlist)
+    answer = result.get("answer") or "I could not produce an answer."
+    assistant_message = {
+        "role": "assistant",
+        "content": answer,
+        "used_search": bool(result.get("used_search")),
+    }
+    new_history = (history + [user_message, assistant_message])[-10:]
+    status = "Answered with web search." if result.get("used_search") else "Answered from shortlist evidence."
+    if result.get("error") and result.get("error") not in {"missing_api_key", "missing_openai_sdk"}:
+        status = "Answered without web search fallback."
+
+    return new_history, render_chat_history(new_history), "", status
 
 
 @app.callback(
