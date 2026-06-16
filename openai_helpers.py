@@ -9,10 +9,24 @@ from typing import Any
 
 DEFAULT_OPENAI_MODEL = "gpt-4o"
 DEFAULT_SPELL_MODEL = "gpt-4o-mini"
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 8.0
 
 
 def _model_for(env_name: str, fallback: str = DEFAULT_OPENAI_MODEL) -> str:
     return os.getenv(env_name) or os.getenv("OPENAI_MODEL") or fallback
+
+
+def _openai_timeout_seconds() -> float:
+    try:
+        return max(2.0, float(os.getenv("OPENAI_TIMEOUT_SECONDS", DEFAULT_OPENAI_TIMEOUT_SECONDS)))
+    except ValueError:
+        return DEFAULT_OPENAI_TIMEOUT_SECONDS
+
+
+def _openai_client(api_key: str):
+    from openai import OpenAI
+
+    return OpenAI(api_key=api_key, timeout=_openai_timeout_seconds(), max_retries=0)
 
 
 NEED_SYNONYMS = {
@@ -123,7 +137,7 @@ def _parse_with_openai(raw_query: str, fallback: ParsedReferralQuery) -> ParsedR
         return None
 
     try:
-        from openai import OpenAI
+        client = _openai_client(api_key)
     except Exception:
         fallback.notes = "OpenAI SDK is not installed; used fallback parsing."
         return None
@@ -135,7 +149,6 @@ def _parse_with_openai(raw_query: str, fallback: ParsedReferralQuery) -> ParsedR
         "Do not invent facility names."
     )
 
-    client = OpenAI(api_key=api_key)
     response = client.responses.create(
         model=_model_for("OPENAI_PARSE_MODEL"),
         input=[
@@ -171,7 +184,7 @@ def web_resolve_india_location(location: str) -> dict[str, Any] | None:
         return None
 
     try:
-        from openai import OpenAI
+        client = _openai_client(api_key)
     except Exception:
         return None
 
@@ -183,7 +196,6 @@ def web_resolve_india_location(location: str) -> dict[str, Any] | None:
         f"Place: {location}"
     )
 
-    client = OpenAI(api_key=api_key)
     response = client.responses.create(
         model=_model_for("OPENAI_SEARCH_MODEL"),
         tools=[{"type": "web_search", "search_context_size": "low"}],
@@ -239,8 +251,7 @@ def spell_check_location(location_text: str) -> str | None:
         return None
 
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
+        client = _openai_client(api_key)
     except Exception:
         return None
 
@@ -329,7 +340,7 @@ def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]]) -> dic
         return {"answer": "Save at least one facility first, then I can compare and investigate the shortlist.", "used_search": False, "error": None}
 
     try:
-        from openai import OpenAI
+        client = _openai_client(api_key)
     except Exception:
         return {
             "answer": "The OpenAI SDK is not installed in this app environment.",
@@ -352,7 +363,6 @@ def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]]) -> dic
         "If web search was useful, mention what you verified from the web; otherwise say you used the saved evidence."
     )
 
-    client = OpenAI(api_key=api_key)
     model = _model_for("OPENAI_CHAT_MODEL")
 
     try:
