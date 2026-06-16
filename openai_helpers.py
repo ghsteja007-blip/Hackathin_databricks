@@ -367,8 +367,8 @@ def _clean_public_signal(payload: dict[str, Any]) -> dict[str, Any]:
         "candidate_id": str(payload.get("candidate_id") or ""),
         "google_rating": rating,
         "google_review_count": review_count,
-        "rating_source": str(payload.get("rating_source") or "public web"),
-        "rating_url": str(payload.get("rating_url") or ""),
+        "rating_source": str(payload.get("rating_source") or "Google Maps"),
+        "rating_url": str(payload.get("rating_url") or payload.get("google_maps_url") or ""),
         "review_themes": [str(item).strip() for item in themes[:5] if str(item).strip()][:5],
         "confidence": str(payload.get("confidence") or "unknown").lower(),
         "source_urls": [str(url) for url in source_urls[:4] if url],
@@ -382,10 +382,10 @@ def _public_rating_delta(signal: dict[str, Any]) -> float:
     if rating is None:
         return 0.0
 
-    # Keep public reputation as a small 0-10 modifier, not a replacement for referral evidence.
+    # Public reputation is a meaningful 0-10 modifier, but still not a replacement for referral evidence.
     confidence = min(1.0, max(0.35, count / 250 if count else 0.45))
-    delta = (float(rating) - 3.8) * 0.75 * confidence
-    return round(max(-0.6, min(0.9, delta)), 2)
+    delta = ((float(rating) - 3.5) / 1.5) * 2.0 * confidence
+    return round(max(-1.5, min(2.0, delta)), 2)
 
 
 def enrich_candidate_public_signals(
@@ -421,10 +421,10 @@ def enrich_candidate_public_signals(
         return candidates, "Public rating lookup skipped: OpenAI SDK unavailable."
 
     system = (
-        "You enrich a healthcare referral shortlist with public web reputation signals. "
-        "Use web search to look up each listed Indian facility. Prefer Google Maps / Google Business Profile rating signals when visible in search results; "
-        "if not visible, use another clearly public rating source and mark the source. "
-        "Return only compact JSON. Do not include medical advice. Do not quote long reviews; summarize themes in your own words."
+        "You enrich a healthcare referral shortlist with public Google reputation signals. "
+        "Use web search to look up each listed Indian facility. The google_rating field must be the overall Google Maps / Google Business Profile rating, not an inferred rating and not another site's rating. "
+        "If the overall Google rating is not confidently visible, set google_rating and google_review_count to null and confidence to not_found. "
+        "Return only compact JSON. Do not include medical advice. Do not quote long reviews; summarize review themes in your own words."
     )
     prompt = (
         "Care need: "
@@ -440,8 +440,8 @@ def enrich_candidate_public_signals(
         '      "candidate_id": "same candidate_id",\n'
         '      "google_rating": 4.2,\n'
         '      "google_review_count": 123,\n'
-        '      "rating_source": "Google Maps or another public source",\n'
-        '      "rating_url": "best public URL if available",\n'
+        '      "rating_source": "Google Maps",\n'
+        '      "rating_url": "Google Maps or Google Business Profile URL if available",\n'
         '      "review_themes": ["short paraphrased theme", "short paraphrased theme"],\n'
         '      "confidence": "high|medium|low|not_found",\n'
         '      "source_urls": ["supporting URL"],\n'
@@ -450,7 +450,7 @@ def enrich_candidate_public_signals(
         "  ],\n"
         '  "note": "overall lookup note"\n'
         "}\n"
-        "If a facility cannot be confidently matched, set confidence to not_found and leave rating fields null."
+        "If a facility cannot be confidently matched to a Google listing, set confidence to not_found and leave Google rating fields null. Do not substitute ratings from Practo, Justdial, Facebook, hospital websites, or other sources into google_rating."
     )
 
     try:

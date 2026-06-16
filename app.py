@@ -120,8 +120,7 @@ def _rating_text(signal: dict[str, Any] | None) -> str:
     if rating is None:
         return ""
     count_text = f" ({int(count):,} reviews)" if count else ""
-    source = signal.get("rating_source") or "public rating"
-    return f"{source}: {float(rating):.1f}/5{count_text}"
+    return f"Google overall: {float(rating):.1f}/5{count_text}"
 
 
 def render_public_signal(candidate: dict[str, Any]) -> html.Div:
@@ -130,7 +129,7 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
         return html.Div(
             className="public-signal public-signal-empty",
             children=[
-                html.Div("Public review signal", className="section-label"),
+                html.Div("Overall Google rating", className="section-label"),
                 chip("not checked or unavailable", "chip chip-soft"),
             ],
         )
@@ -144,9 +143,9 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
 
     chips = []
     if rating is not None:
-        chips.append(chip(f"rating {float(rating):.1f}/5", "chip chip-ok"))
+        chips.append(chip(f"Google overall {float(rating):.1f}/5", "chip chip-ok"))
     if count:
-        chips.append(chip(f"{int(count):,} public reviews", "chip chip-soft"))
+        chips.append(chip(f"{int(count):,} Google reviews", "chip chip-soft"))
     if delta not in (None, ""):
         sign = "+" if float(delta) >= 0 else ""
         chips.append(chip(f"{sign}{float(delta):.1f}/10 adjustment", "chip chip-soft"))
@@ -155,7 +154,7 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
     return html.Div(
         className="public-signal",
         children=[
-            html.Div("Public review signal", className="section-label"),
+            html.Div("Overall Google rating", className="section-label"),
             html.Div(className="public-signal-chips", children=chips),
             html.Div(
                 className="public-themes",
@@ -163,7 +162,7 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
                 or [chip(signal.get("notes") or "No review themes found", "chip chip-warning")],
             ),
             html.A(
-                "Open public source",
+                "Open Google source",
                 href=url,
                 target="_blank",
                 rel="noreferrer",
@@ -201,7 +200,7 @@ def _candidate_points(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _score_color(score: Any) -> str:
-    value = _safe_float(score) or 0
+    value = _score_value(score)
     if value >= 8:
         return "#0f766e"
     if value >= 6.5:
@@ -212,13 +211,20 @@ def _score_color(score: Any) -> str:
 
 
 def _score_radius(score: Any) -> int:
-    value = _safe_float(score) or 0
+    value = _score_value(score)
     return int(max(8, min(22, 8 + value * 1.2)))
+
+
+def _score_value(score: Any) -> float:
+    value = _safe_float(score)
+    if value is None:
+        return 0.0
+    return max(0.0, min(10.0, value))
 
 
 def _score_text(score: Any) -> str:
     value = _safe_float(score)
-    return "n/a" if value is None else f"{value:.1f}/10"
+    return "n/a" if value is None else f"{_score_value(value):.1f}/10"
 
 
 def _map_bounds(lats: list[float], lons: list[float]) -> list[list[float]]:
@@ -254,7 +260,7 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
     lats = [candidate.get("latitude") for candidate in candidates]
     lons = [candidate.get("longitude") for candidate in candidates]
     names = [candidate.get("name") for candidate in candidates]
-    scores = [candidate.get("score", 0) for candidate in candidates]
+    scores = [_score_value(candidate.get("score")) for candidate in candidates]
     candidate_ids = [candidate.get("candidate_id") for candidate in candidates]
 
     hover_text = []
@@ -289,7 +295,7 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
             hovertext=hover_text,
             hoverinfo="text",
             marker={
-                "size": [max(10, min(28, 10 + float(score or 0) * 1.7)) for score in scores],
+                "size": [max(10, min(28, 10 + score * 1.7)) for score in scores],
                 "color": scores,
                 "cmin": 0,
                 "cmax": 10,
@@ -536,7 +542,7 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
                     html.Div(
                         className="score-stack",
                         children=[
-                            html.Strong(f"{(_safe_float(candidate.get('score')) or 0):.1f}"),
+                            html.Strong(f"{_score_value(candidate.get('score')):.1f}"),
                             html.Span("/10 adjusted" if has_public_signal else "/10 score"),
                         ],
                     ),
@@ -955,7 +961,7 @@ app.layout = html.Div(
                                     ],
                                 ),
                                 html.Div(
-                                    className="chat-composer",
+                                    className="copilot-composer",
                                     children=[
                                         dcc.Textarea(
                                             id="chat-input",
@@ -964,7 +970,7 @@ app.layout = html.Div(
                                             value="",
                                         ),
                                         html.Div(
-                                            className="chat-composer-row",
+                                            className="copilot-composer-row",
                                             children=[
                                                 html.Div(id="chat-status", className="chat-status"),
                                                 html.Button(
@@ -1320,7 +1326,7 @@ def run_search(
                 location_label=location.get("label") or parsed.location,
             )
             if public_note:
-                data_notes = data_notes + [f"Public review signal: {public_note}"]
+                data_notes = data_notes + [f"Google rating signal: {public_note}"]
 
         parsed_dict = parsed.to_dict()
         return (
