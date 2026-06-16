@@ -13,6 +13,28 @@ from referral_engine import rank_facilities, resolve_location
 
 
 APP_TITLE = "Referral Copilot"
+CHAT_PROMPTS = [
+    {
+        "id": "compare",
+        "label": "Compare saved",
+        "prompt": "Compare the saved facilities and recommend the strongest referral option. Call out tradeoffs and what to verify.",
+    },
+    {
+        "id": "verify",
+        "label": "Verify contacts",
+        "prompt": "Use web search if needed to check current contact details, website, and public information for the saved facilities.",
+    },
+    {
+        "id": "risks",
+        "label": "Evidence gaps",
+        "prompt": "What evidence is missing or suspicious across the saved shortlist, and what should a coordinator verify before referral?",
+    },
+    {
+        "id": "next",
+        "label": "Next steps",
+        "prompt": "Create a concise coordinator handoff plan for the saved shortlist, including calls to make and questions to ask.",
+    },
+]
 
 app = Dash(__name__, title=APP_TITLE, suppress_callback_exceptions=True)
 server = app.server
@@ -81,6 +103,29 @@ _USE_TILE_MAP = (
     and os.getenv("ENABLE_TILE_MAP", "false").lower() in {"1", "true", "yes", "on"}
 )
 
+INDIA_OUTLINE_LON = [
+    68.2, 69.3, 70.7, 72.1, 73.3, 74.5, 75.4, 76.7, 78.1, 80.0, 82.1, 84.2,
+    86.5, 88.0, 89.8, 91.2, 92.8, 94.5, 96.5, 97.4, 96.2, 94.2, 92.2, 90.0,
+    88.3, 87.2, 86.4, 85.0, 83.3, 81.5, 80.2, 79.2, 78.3, 77.2, 76.1, 74.9,
+    73.7, 72.5, 71.1, 69.8, 68.8, 68.2,
+]
+INDIA_OUTLINE_LAT = [
+    23.6, 24.9, 25.5, 26.3, 29.2, 31.0, 32.6, 34.4, 34.9, 33.8, 32.6, 31.5,
+    30.0, 28.3, 27.4, 26.7, 26.1, 27.0, 28.1, 27.0, 25.0, 24.1, 23.5, 22.5,
+    21.3, 20.1, 18.9, 17.6, 16.5, 15.4, 13.7, 11.7, 9.6, 8.1, 9.6, 12.2,
+    15.0, 18.2, 20.4, 22.1, 23.0, 23.6,
+]
+
+MAP_CITY_LABELS = [
+    {"name": "Delhi", "lat": 28.61, "lon": 77.21},
+    {"name": "Mumbai", "lat": 19.08, "lon": 72.88},
+    {"name": "Jaipur", "lat": 26.91, "lon": 75.79},
+    {"name": "Patna", "lat": 25.59, "lon": 85.14},
+    {"name": "Chennai", "lat": 13.08, "lon": 80.27},
+    {"name": "Kolkata", "lat": 22.57, "lon": 88.36},
+    {"name": "Bengaluru", "lat": 12.97, "lon": 77.59},
+]
+
 
 def _finite_float(value: Any) -> float | None:
     try:
@@ -90,20 +135,14 @@ def _finite_float(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _axis_range(values: list[float], minimum_span: float = 0.35) -> list[float]:
-    low = min(values)
-    high = max(values)
-    span = max(high - low, minimum_span)
-    pad = max(span * 0.22, minimum_span / 2)
-    return [low - pad, high + pad]
-
-
 def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> dcc.Graph:
     mapped_candidates = []
     for c in candidates:
         lat = _finite_float(c.get("latitude"))
         lon = _finite_float(c.get("longitude"))
         if lat is None or lon is None:
+            continue
+        if not (6 <= lat <= 38 and 68 <= lon <= 98):
             continue
         mapped_candidates.append({**c, "_lat": lat, "_lon": lon})
 
@@ -229,16 +268,39 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
         )
 
     else:
-        line_x: list[float | None] = []
-        line_y: list[float | None] = []
+        line_lats: list[float | None] = []
+        line_lons: list[float | None] = []
         for c in mapped_candidates[:12]:
-            line_x.extend([origin_lon, c["_lon"], None])
-            line_y.extend([origin_lat, c["_lat"], None])
+            line_lats.extend([origin_lat, c["_lat"], None])
+            line_lons.extend([origin_lon, c["_lon"], None])
 
         fig.add_trace(
-            go.Scatter(
-                x=line_x,
-                y=line_y,
+            go.Scattergeo(
+                lat=INDIA_OUTLINE_LAT,
+                lon=INDIA_OUTLINE_LON,
+                mode="lines",
+                fill="toself",
+                fillcolor="rgba(240, 253, 250, 0.92)",
+                line={"color": "rgba(15, 118, 110, 0.55)", "width": 1.6},
+                hoverinfo="skip",
+                name="India",
+            )
+        )
+        fig.add_trace(
+            go.Scattergeo(
+                lat=[item["lat"] for item in MAP_CITY_LABELS],
+                lon=[item["lon"] for item in MAP_CITY_LABELS],
+                mode="text",
+                text=[item["name"] for item in MAP_CITY_LABELS],
+                textfont={"size": 10, "color": "#64748b"},
+                hoverinfo="skip",
+                name="Reference cities",
+            )
+        )
+        fig.add_trace(
+            go.Scattergeo(
+                lat=line_lats,
+                lon=line_lons,
                 mode="lines",
                 line={"color": "rgba(15, 118, 110, 0.28)", "width": 1.5},
                 hoverinfo="skip",
@@ -246,9 +308,9 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             )
         )
         fig.add_trace(
-            go.Scatter(
-                x=lons,
-                y=lats,
+            go.Scattergeo(
+                lat=lats,
+                lon=lons,
                 mode="markers+text",
                 text=[str(i + 1) for i in range(len(mapped_candidates))],
                 textposition="middle center",
@@ -267,9 +329,9 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             )
         )
         fig.add_trace(
-            go.Scatter(
-                x=[origin_lon],
-                y=[origin_lat],
+            go.Scattergeo(
+                lat=[origin_lat],
+                lon=[origin_lon],
                 mode="markers+text",
                 text=["Origin"],
                 textposition="top center",
@@ -281,7 +343,7 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             )
         )
         fig.update_layout(
-            margin={"l": 8, "r": 8, "t": 8, "b": 8},
+            margin={"l": 0, "r": 0, "t": 0, "b": 0},
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             showlegend=False,
@@ -290,33 +352,22 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
                 "bordercolor": "#334155",
                 "font": {"color": "#f8fafc", "size": 13},
             },
-            annotations=[
-                {
-                    "text": "Offline-safe coordinate map",
-                    "xref": "paper",
-                    "yref": "paper",
-                    "x": 0.01,
-                    "y": 0.99,
-                    "showarrow": False,
-                    "font": {"size": 11, "color": "#64748b"},
-                    "align": "left",
-                }
-            ],
-            xaxis={
-                "title": "Longitude",
-                "range": _axis_range(all_lons),
-                "showgrid": True,
-                "gridcolor": "rgba(100,116,139,0.18)",
-                "zeroline": False,
-            },
-            yaxis={
-                "title": "Latitude",
-                "range": _axis_range(all_lats),
-                "showgrid": True,
-                "gridcolor": "rgba(100,116,139,0.18)",
-                "zeroline": False,
-                "scaleanchor": "x",
-                "scaleratio": 1,
+            geo={
+                "scope": "asia",
+                "projection": {"type": "mercator"},
+                "center": {"lat": center_lat, "lon": center_lon},
+                "showframe": False,
+                "showcoastlines": False,
+                "showland": True,
+                "landcolor": "#f8fafc",
+                "showocean": True,
+                "oceancolor": "#e0f2fe",
+                "showcountries": True,
+                "countrycolor": "#cbd5e1",
+                "showsubunits": True,
+                "subunitcolor": "#e2e8f0",
+                "lonaxis": {"range": [67.0, 99.0]},
+                "lataxis": {"range": [5.5, 37.5]},
             },
         )
 
@@ -468,7 +519,7 @@ def render_results(
                         className="map-header",
                         children=[
                             html.H2("Referral Map"),
-                            html.Span("Offline-safe map: numbered candidates, route lines, hover evidence, click inspection."),
+                            html.Span("India-focused view: numbered candidates, route lines, hover evidence, click inspection."),
                         ],
                     ),
                     render_candidate_map(location, candidates),
@@ -775,10 +826,31 @@ app.layout = html.Div(
                                     className="chat-heading",
                                     children=[
                                         html.H2("Ask Copilot"),
-                                        html.P("Use saved facilities plus web search when fresh details matter."),
+                                        html.P("Saved facilities become context. Web search runs when current details matter."),
                                     ],
                                 ),
-                                html.Div(id="chat-history", className="chat-thread", children=render_chat_history([])),
+                                html.Div(
+                                    className="chat-presets",
+                                    children=[
+                                        html.Button(
+                                            item["label"],
+                                            id={"type": "chat-preset", "index": item["id"]},
+                                            className="chat-preset",
+                                            n_clicks=0,
+                                        )
+                                        for item in CHAT_PROMPTS
+                                    ],
+                                ),
+                                dcc.Loading(
+                                    id="chat-loading",
+                                    type="dot",
+                                    color="#0f766e",
+                                    children=html.Div(
+                                        id="chat-history",
+                                        className="chat-thread",
+                                        children=render_chat_history([]),
+                                    ),
+                                ),
                                 dcc.Textarea(
                                     id="chat-input",
                                     className="chat-input",
@@ -1157,6 +1229,21 @@ def update_shortlist(save_clicks, clear_clicks, candidates, shortlist):
         shortlist = shortlist + [candidate]
 
     return shortlist, render_shortlist(shortlist)
+
+
+@app.callback(
+    Output("chat-input", "value", allow_duplicate=True),
+    Input({"type": "chat-preset", "index": ALL}, "n_clicks"),
+    State("chat-input", "value"),
+    prevent_initial_call=True,
+)
+def apply_chat_preset(preset_clicks, current_value):
+    triggered = ctx.triggered_id
+    if not isinstance(triggered, dict) or triggered.get("type") != "chat-preset":
+        return no_update
+
+    prompt_by_id = {item["id"]: item["prompt"] for item in CHAT_PROMPTS}
+    return prompt_by_id.get(triggered.get("index"), current_value or "")
 
 
 @app.callback(
