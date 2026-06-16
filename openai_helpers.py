@@ -18,6 +18,7 @@ DEFAULT_PUBLIC_SIGNAL_CACHE_SECONDS = 6 * 60 * 60
 
 _PUBLIC_SIGNAL_CACHE: dict[str, tuple[float, dict[str, dict[str, Any]], str | None]] = {}
 _TRANSLATION_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_UI_TRANSLATION_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
 
 
 def _model_for(env_name: str, fallback: str = DEFAULT_OPENAI_MODEL) -> str:
@@ -251,8 +252,10 @@ def _parse_with_openai(raw_query: str, fallback: ParsedReferralQuery) -> ParsedR
         return None
 
     system_prompt = (
-        "Extract referral search intent from the user's text. "
+        "Extract referral search intent from the user's text, which may be in English or an Indian language. "
         "Return only JSON with keys: care_need, location, urgency, required_terms. "
+        "Normalize care_need and required_terms to English facility-record matching terms even when the user typed another language. "
+        "Keep location as the place name a geography resolver can understand; transliterate it to common English spelling when useful, but keep pin codes unchanged. "
         "required_terms should be short facility-record match terms, not diagnosis advice. "
         "Do not invent facility names."
     )
@@ -658,9 +661,15 @@ def enrich_candidate_public_signals(
     return _apply_public_signals(candidates, signals), str(note)
 
 
-def _translation_cache_key(language: str, parsed: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
+def _translation_cache_key(
+    language: str,
+    parsed: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    ui_text: dict[str, str] | None = None,
+) -> str:
     payload = {
         "language": language,
+        "ui_text": ui_text or {},
         "care_need": parsed.get("care_need"),
         "terms": parsed.get("required_terms", [])[:10],
         "candidates": [
@@ -695,8 +704,13 @@ def _translation_cache_ttl_seconds() -> float:
         return 21600.0
 
 
-def _translation_payload(parsed: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def _translation_payload(
+    parsed: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    ui_text: dict[str, str] | None = None,
+) -> dict[str, Any]:
     return {
+        "ui_text": ui_text or {},
         "parsed": {
             "care_need": parsed.get("care_need"),
             "required_terms": parsed.get("required_terms", [])[:10],
@@ -728,10 +742,18 @@ def _translation_payload(parsed: dict[str, Any], candidates: list[dict[str, Any]
 def _apply_translation_payload(
     candidates: list[dict[str, Any]],
     parsed: dict[str, Any],
+    ui_text: dict[str, str] | None,
     translated: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str]]:
     updated_candidates = copy.deepcopy(candidates)
     updated_parsed = copy.deepcopy(parsed)
+    updated_ui_text = copy.deepcopy(ui_text or {})
+
+    translated_ui_text = translated.get("ui_text") or {}
+    if isinstance(translated_ui_text, dict):
+        for key, value in translated_ui_text.items():
+            if key in updated_ui_text and str(value).strip():
+                updated_ui_text[key] = str(value)
 
     translated_parsed = translated.get("parsed") or {}
     if translated_parsed.get("care_need"):
@@ -763,6 +785,7 @@ def _apply_translation_payload(
                     evidence["terms"] = [str(term) for term in translated_evidence["terms"][:6] if str(term).strip()]
                 if translated_evidence.get("snippet"):
                     evidence["snippet"] = str(translated_evidence["snippet"])
+                    evidence["translated"] = True
 
         if isinstance(patch.get("missing_or_suspicious"), list):
             candidate["missing_or_suspicious"] = [
@@ -784,42 +807,117 @@ def _apply_translation_payload(
         if signal:
             candidate["public_signal"] = signal
 
-    return updated_candidates, updated_parsed
+    return updated_candidates, updated_parsed, updated_ui_text
+
+
+def _ui_translation_cache_key(language: str, ui_text: dict[str, str]) -> str:
+    payload = {
+        "language": language,
+        "ui_text": ui_text,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def translate_ui_text(
+    ui_text: dict[str, str],
+    language: str,
+) -> tuple[dict[str, str], str | None]:
+    language = (language or "English").strip()
+    base_text = copy.deepcopy(ui_text or {})
+    if not language or language.lower() == "english" or not base_text:
+        return base_text, None
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return base_text, "UI translation skipped: OpenAI is not configured."
+
+    cache_key = _ui_translation_cache_key(language, base_text)
+    cached = _UI_TRANSLATION_CACHE.get(cache_key)
+    ttl = _translation_cache_ttl_seconds()
+    if cached and ttl > 0 and (time.time() - cached[0]) <= ttl:
+        return copy.deepcopy(cached[1]), None
+
+    try:
+        client = _openai_client(api_key)
+    except Exception:
+        return base_text, "UI translation skipped: OpenAI SDK unavailable."
+
+    system = (
+        "Translate app UI copy for a healthcare referral coordination app in India. "
+        "Translate every value into the requested language while preserving every JSON key exactly. "
+        "Keep product names, environment names, IDs, URLs, numeric ranges, and placeholders such as {name} unchanged. "
+        "Use concise professional wording suitable for buttons, labels, placeholders, and status messages. "
+        "Return compact JSON only."
+    )
+    prompt = (
+        f"Target language: {language}\n\n"
+        "Translate this UI dictionary. Return the same object shape with identical keys.\n"
+        f"{json.dumps(base_text, ensure_ascii=False, indent=2)}"
+    )
+
+    try:
+        response = _responses_create_with_retry(
+            client,
+            model=_model_for("OPENAI_TRANSLATION_MODEL", DEFAULT_SPELL_MODEL),
+            input=[
+                {"role": "developer", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        translated = _extract_json(getattr(response, "output_text", "") or "")
+        if not isinstance(translated, dict):
+            return base_text, "UI translation returned an invalid response."
+
+        output = base_text.copy()
+        for key, value in translated.items():
+            if key in output and str(value).strip():
+                output[key] = str(value)
+
+        if ttl > 0:
+            _UI_TRANSLATION_CACHE[cache_key] = (time.time(), output)
+            while len(_UI_TRANSLATION_CACHE) > 32:
+                oldest_key = min(_UI_TRANSLATION_CACHE, key=lambda key: _UI_TRANSLATION_CACHE[key][0])
+                _UI_TRANSLATION_CACHE.pop(oldest_key, None)
+        return output, None
+    except Exception as exc:
+        return base_text, _friendly_openai_unavailable_message(exc, "UI translation")
 
 
 def translate_referral_results(
     candidates: list[dict[str, Any]],
     parsed: dict[str, Any],
     language: str,
-) -> tuple[list[dict[str, Any]], dict[str, Any], str | None]:
+    ui_text: dict[str, str] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str], str | None]:
     language = (language or "English").strip()
     if not language or language.lower() == "english" or not candidates:
-        return candidates, parsed, None
+        return candidates, parsed, ui_text or {}, None
 
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        return candidates, parsed, "Translation skipped: OpenAI is not configured."
+        return candidates, parsed, ui_text or {}, "Translation skipped: OpenAI is not configured."
 
-    cache_key = _translation_cache_key(language, parsed, candidates)
+    cache_key = _translation_cache_key(language, parsed, candidates, ui_text)
     cached = _TRANSLATION_CACHE.get(cache_key)
     ttl = _translation_cache_ttl_seconds()
     if cached and ttl > 0 and (time.time() - cached[0]) <= ttl:
-        cached_candidates, cached_parsed = _apply_translation_payload(candidates, parsed, cached[1])
-        return cached_candidates, cached_parsed, None
+        cached_candidates, cached_parsed, cached_ui_text = _apply_translation_payload(candidates, parsed, ui_text, cached[1])
+        return cached_candidates, cached_parsed, cached_ui_text, None
 
     try:
         client = _openai_client(api_key)
     except Exception:
-        return candidates, parsed, "Translation skipped: OpenAI SDK unavailable."
+        return candidates, parsed, ui_text or {}, "Translation skipped: OpenAI SDK unavailable."
 
     system = (
         "You translate healthcare referral result text for Indian care coordinators. "
         "Translate only user-facing explanatory text into the requested language. "
         "Do not translate hospital/facility names, phone numbers, emails, URLs, pin codes, coordinates, IDs, or proper nouns. "
+        "Translate every value under ui_text. Keep every ui_text key exactly unchanged. "
         "Keep medical terms accurate; transliterate only when that is more natural for the target language. "
         "Return compact JSON only."
     )
-    payload = _translation_payload(parsed, candidates)
+    payload = _translation_payload(parsed, candidates, ui_text)
     prompt = (
         f"Target language: {language}\n\n"
         "Translate this JSON and return the same shape. Preserve candidate_id values exactly.\n"
@@ -841,13 +939,18 @@ def translate_referral_results(
             while len(_TRANSLATION_CACHE) > 64:
                 oldest_key = min(_TRANSLATION_CACHE, key=lambda key: _TRANSLATION_CACHE[key][0])
                 _TRANSLATION_CACHE.pop(oldest_key, None)
-        translated_candidates, translated_parsed = _apply_translation_payload(candidates, parsed, translated)
-        return translated_candidates, translated_parsed, None
+        translated_candidates, translated_parsed, translated_ui_text = _apply_translation_payload(
+            candidates,
+            parsed,
+            ui_text,
+            translated,
+        )
+        return translated_candidates, translated_parsed, translated_ui_text, None
     except Exception as exc:
-        return candidates, parsed, _friendly_openai_unavailable_message(exc, "Result translation")
+        return candidates, parsed, ui_text or {}, _friendly_openai_unavailable_message(exc, "Result translation")
 
 
-def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]]) -> dict[str, Any]:
+def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]], language: str = "English") -> dict[str, Any]:
     """
     Answer coordinator questions about the saved shortlist.
 
@@ -878,10 +981,12 @@ def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]]) -> dic
         }
 
     facilities = [_facility_for_prompt(item) for item in shortlist[:8]]
+    answer_language = (language or "English").strip() or "English"
     system = (
         "You are Referral Copilot for a care coordinator in India. "
         "Use the saved shortlist evidence first. Use web search only when the user asks for current, external, or missing details such as websites, phone verification, public reputation, hours, directions, or recent information. "
-        "Do not provide diagnosis or treatment instructions. Be explicit about uncertainty and tell the user what must be verified before referral."
+        "Do not provide diagnosis or treatment instructions. Be explicit about uncertainty and tell the user what must be verified before referral. "
+        f"Respond in {answer_language}, preserving facility names, phone numbers, emails, URLs, and source titles exactly."
     )
     prompt = (
         "Saved facility shortlist JSON:\n"

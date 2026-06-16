@@ -20,6 +20,7 @@ from openai_helpers import (
     parse_referral_query,
     spell_check_location,
     translate_referral_results,
+    translate_ui_text,
 )
 from referral_engine import rank_facilities, resolve_location
 
@@ -27,16 +28,16 @@ from referral_engine import rank_facilities, resolve_location
 APP_TITLE = "Referral Copilot"
 LANGUAGE_OPTIONS = [
     {"label": "English", "value": "English"},
-    {"label": "Hindi", "value": "Hindi"},
-    {"label": "Telugu", "value": "Telugu"},
-    {"label": "Tamil", "value": "Tamil"},
-    {"label": "Kannada", "value": "Kannada"},
-    {"label": "Malayalam", "value": "Malayalam"},
-    {"label": "Marathi", "value": "Marathi"},
-    {"label": "Bengali", "value": "Bengali"},
-    {"label": "Gujarati", "value": "Gujarati"},
-    {"label": "Punjabi", "value": "Punjabi"},
-    {"label": "Urdu", "value": "Urdu"},
+    {"label": "हिन्दी", "value": "Hindi"},
+    {"label": "తెలుగు", "value": "Telugu"},
+    {"label": "தமிழ்", "value": "Tamil"},
+    {"label": "ಕನ್ನಡ", "value": "Kannada"},
+    {"label": "മലയാളം", "value": "Malayalam"},
+    {"label": "मराठी", "value": "Marathi"},
+    {"label": "বাংলা", "value": "Bengali"},
+    {"label": "ગુજરાતી", "value": "Gujarati"},
+    {"label": "ਪੰਜਾਬੀ", "value": "Punjabi"},
+    {"label": "اردو", "value": "Urdu"},
 ]
 MEDICAL_DISPLAY_TERMS = [
     "dialysis",
@@ -89,25 +90,147 @@ NOISY_EVIDENCE_MARKERS = [
 CHAT_PROMPTS = [
     {
         "id": "compare",
+        "label_key": "chat_compare",
+        "prompt_key": "chat_compare_prompt",
         "label": "Compare saved",
         "prompt": "Compare the saved facilities and recommend the strongest referral option. Call out tradeoffs and what to verify.",
     },
     {
         "id": "verify",
+        "label_key": "chat_verify",
+        "prompt_key": "chat_verify_prompt",
         "label": "Verify contacts",
         "prompt": "Use web search if needed to check current contact details, website, and public information for the saved facilities.",
     },
     {
         "id": "risks",
+        "label_key": "chat_risks",
+        "prompt_key": "chat_risks_prompt",
         "label": "Evidence gaps",
         "prompt": "What evidence is missing or suspicious across the saved shortlist, and what should a coordinator verify before referral?",
     },
     {
         "id": "next",
+        "label_key": "chat_next",
+        "prompt_key": "chat_next_prompt",
         "label": "Next steps",
         "prompt": "Create a concise coordinator handoff plan for the saved shortlist, including calls to make and questions to ask.",
     },
 ]
+DEFAULT_RESULT_UI_TEXT = {
+    "app_title": "Referral Copilot",
+    "app_subtitle": "Evidence-attached care facility shortlists.",
+    "language": "Language",
+    "dark": "Dark",
+    "light": "Light",
+    "find_facility": "Find a facility",
+    "find_facility_help": "Choose a search mode, describe what you need, then hit Search.",
+    "mode_freetext": "Free text",
+    "mode_pincode": "Pin code",
+    "mode_location": "My location",
+    "care_need_location": "Care need + location",
+    "query_hint": 'e.g. "dialysis near Jaipur" or "emergency surgery near 380007"',
+    "query_placeholder": "dialysis near Jaipur",
+    "care_need_label": "Care need",
+    "care_need_placeholder": "e.g. dialysis, emergency surgery",
+    "pin_code": "Pin code",
+    "pin_hint": "Your 6-digit postal pin code",
+    "use_my_location": "Use My Location",
+    "use_location_title": "Use your device's GPS to set the search origin",
+    "use_this": "Use this",
+    "search_radius_km": "Search radius km",
+    "max_results": "Max results",
+    "global_search": "Search",
+    "shortlist": "Shortlist",
+    "clear": "Clear",
+    "no_saved_facilities": "No saved facilities yet.",
+    "download_csv": "Download CSV",
+    "ask_copilot": "Ask Copilot",
+    "chat_help": "Saved facilities become context. Web search runs when current details matter.",
+    "chat_empty_title": "Shortlist copilot",
+    "chat_empty_body": "Save hospitals, then ask about tradeoffs, gaps, contact checks, or what to verify next.",
+    "chat_placeholder": "Compare my shortlist, check evidence gaps, or look up current details...",
+    "ask_copilot_button": "Ask Copilot",
+    "chat_compare": "Compare saved",
+    "chat_verify": "Verify contacts",
+    "chat_risks": "Evidence gaps",
+    "chat_next": "Next steps",
+    "chat_compare_prompt": "Compare the saved facilities and recommend the strongest referral option. Call out tradeoffs and what to verify.",
+    "chat_verify_prompt": "Use web search if needed to check current contact details, website, and public information for the saved facilities.",
+    "chat_risks_prompt": "What evidence is missing or suspicious across the saved shortlist, and what should a coordinator verify before referral?",
+    "chat_next_prompt": "Create a concise coordinator handoff plan for the saved shortlist, including calls to make and questions to ask.",
+    "you": "You",
+    "copilot": "Copilot",
+    "web_checked": "web checked",
+    "footer": "Referral support only. Verify availability, clinical fit, insurance, and emergency status before sending a patient.",
+    "start_search": "Start a referral search",
+    "start_search_help": "Pick a search mode on the left, describe what you need, and click Search.",
+    "enter_need_location": "Enter a care need and location.",
+    "enter_care_need": "Enter a care need.",
+    "click_search_language": "Click Search to generate results in the selected language.",
+    "found_status": "Found {count} candidates within {radius} km (showing up to {limit}) using {source} parsing. {note}",
+    "answered_web": "Answered with web search.",
+    "answered_evidence": "Answered from shortlist evidence.",
+    "answered_fallback": "Answered without web search fallback.",
+    "need": "Need",
+    "location": "Location",
+    "terms": "Terms",
+    "unknown": "unknown",
+    "none": "none",
+    "via": "via",
+    "matches": "matches",
+    "referral_map": "Referral Map",
+    "map_instruction": "Leaflet view: drag, zoom, open popups, and click markers for evidence.",
+    "mapped_facilities": "mapped facilities",
+    "nearest": "nearest",
+    "top_score": "top score",
+    "selected_facility": "Selected facility",
+    "click_facility": "Click a facility marker to inspect details.",
+    "no_direct_evidence_terms": "No direct evidence terms",
+    "matching_evidence": "Matching evidence",
+    "missing_evidence": "Missing or suspicious evidence",
+    "no_evidence_gaps": "No obvious evidence gaps detected",
+    "no_direct_matching_evidence": "No direct matching evidence found in the facility record.",
+    "public_review_signal": "Public review signal",
+    "not_checked": "not checked or unavailable",
+    "no_review_themes": "No review themes found",
+    "open_public_source": "Open public source",
+    "rating": "rating",
+    "reviews": "reviews",
+    "public_reviews": "public reviews",
+    "adjustment": "adjustment",
+    "confidence": "confidence",
+    "website": "Website",
+    "website_unavailable": "Website unavailable",
+    "public_source": "Public source",
+    "source": "Source",
+    "call": "Call",
+    "schedule": "Schedule",
+    "save": "Save",
+    "score": "score",
+    "adjusted": "adjusted",
+    "base": "base",
+    "facility": "facility",
+    "operator_unknown": "operator unknown",
+    "location_unknown": "location unknown",
+    "km_away": "km away",
+    "evidence": "Evidence",
+    "type": "Type",
+    "candidate_facilities": "Candidate facilities",
+    "search_origin": "Search origin",
+    "resolved_search_origin": "Resolved search origin",
+    "field_specialties": "Specialties",
+    "field_procedure": "Procedure",
+    "field_equipment": "Equipment",
+    "field_capability": "Capability",
+    "field_description": "Description",
+    "field_services": "Services",
+}
+HIDDEN_DATA_NOTE_PREFIXES = (
+    "databricks sql",
+    "local csv fallback",
+    "result translation",
+)
 
 app = Dash(__name__, title=APP_TITLE, suppress_callback_exceptions=True)
 server = app.server
@@ -141,13 +264,31 @@ def chip(text: str, class_name: str = "chip") -> html.Span:
     return html.Span(text, className=class_name)
 
 
-def render_empty_state() -> html.Div:
+def ui_text(ui_text_map: dict[str, str] | None, key: str) -> str:
+    value = (ui_text_map or {}).get(key)
+    return str(value) if value else DEFAULT_RESULT_UI_TEXT.get(key, key.replace("_", " "))
+
+
+def visible_data_notes(data_notes: list[str], warnings: list[str] | None = None) -> list[str]:
+    visible = []
+    for note in (data_notes or []) + (warnings or []):
+        text = str(note or "").strip()
+        lowered = text.lower()
+        if not text:
+            continue
+        if any(lowered.startswith(prefix) for prefix in HIDDEN_DATA_NOTE_PREFIXES):
+            continue
+        visible.append(text)
+    return visible
+
+
+def render_empty_state(ui_text_map: dict[str, str] | None = None) -> html.Div:
     return html.Div(
         className="empty-state",
         children=[
-            html.H2("Start a referral search"),
+            html.H2(ui_text(ui_text_map, "start_search")),
             html.P(
-                "Pick a search mode on the left, describe what you need, and click Search."
+                ui_text(ui_text_map, "start_search_help")
             ),
         ],
     )
@@ -202,17 +343,38 @@ def _clean_evidence_snippet(field: str, snippet: str, terms: list[str]) -> str:
     return clean[:177].rstrip(" ,.;") + "..." if len(clean) > 180 else clean
 
 
-def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
+def prepare_candidates_for_display(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for candidate in candidates:
+        for item in candidate.get("evidence", []) or []:
+            if item.get("translated"):
+                continue
+            item["snippet"] = _clean_evidence_snippet(
+                str(item.get("field") or "evidence"),
+                item.get("snippet") or "",
+                item.get("terms", []) or [],
+            )
+            item["display_prepared"] = True
+    return candidates
+
+
+def render_evidence(items: list[dict[str, Any]], ui_text_map: dict[str, str] | None = None) -> list[html.Div]:
     if not items:
-        return [html.Div("No direct matching evidence found in the facility record.", className="muted")]
+        return [html.Div(ui_text(ui_text_map, "no_direct_matching_evidence"), className="muted")]
 
     rendered = []
     for item in items[:6]:
         field = item.get("field", "evidence")
-        label = field.replace("_", " ").title()
-        terms_list = [_display_label(_humanize_evidence_text(term).lower()) for term in item.get("terms", [])[:5]]
+        label = ui_text(ui_text_map, f"field_{field}") if f"field_{field}" in DEFAULT_RESULT_UI_TEXT else field.replace("_", " ").title()
+        if item.get("translated"):
+            terms_list = [str(term).strip() for term in item.get("terms", [])[:5] if str(term).strip()]
+        else:
+            terms_list = [_display_label(_humanize_evidence_text(term).lower()) for term in item.get("terms", [])[:5]]
         terms = ", ".join(dict.fromkeys(terms_list))
-        snippet = _clean_evidence_snippet(field, item.get("snippet") or "", item.get("terms", []))
+        snippet = (
+            str(item.get("snippet") or "").strip()
+            if item.get("translated") or item.get("display_prepared")
+            else _clean_evidence_snippet(field, item.get("snippet") or "", item.get("terms", []))
+        )
         rendered.append(
             html.Div(
                 className="evidence-row",
@@ -226,14 +388,14 @@ def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
     return rendered
 
 
-def _rating_text(signal: dict[str, Any] | None) -> str:
+def _rating_text(signal: dict[str, Any] | None, ui_text_map: dict[str, str] | None = None) -> str:
     if not signal:
         return ""
     rating = signal.get("google_rating")
     count = signal.get("google_review_count")
     if rating is None:
         return ""
-    count_text = f" ({int(count):,} reviews)" if count else ""
+    count_text = f" ({int(count):,} {ui_text(ui_text_map, 'reviews')})" if count else ""
     source = signal.get("rating_source") or "public rating"
     return f"{source}: {float(rating):.1f}/5{count_text}"
 
@@ -251,14 +413,14 @@ def _first_http_url(values: list[Any] | None) -> str:
     return ""
 
 
-def render_public_signal(candidate: dict[str, Any]) -> html.Div:
+def render_public_signal(candidate: dict[str, Any], ui_text_map: dict[str, str] | None = None) -> html.Div:
     signal = candidate.get("public_signal") or {}
     if not signal:
         return html.Div(
             className="public-signal public-signal-empty",
             children=[
-                html.Div("Public review signal", className="section-label"),
-                chip("not checked or unavailable", "chip chip-soft"),
+                html.Div(ui_text(ui_text_map, "public_review_signal"), className="section-label"),
+                chip(ui_text(ui_text_map, "not_checked"), "chip chip-soft"),
             ],
         )
 
@@ -271,26 +433,26 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
 
     chips = []
     if rating is not None:
-        chips.append(chip(f"rating {float(rating):.1f}/5", "chip chip-ok"))
+        chips.append(chip(f"{ui_text(ui_text_map, 'rating')} {float(rating):.1f}/5", "chip chip-ok"))
     if count:
-        chips.append(chip(f"{int(count):,} public reviews", "chip chip-soft"))
+        chips.append(chip(f"{int(count):,} {ui_text(ui_text_map, 'public_reviews')}", "chip chip-soft"))
     if delta not in (None, ""):
         sign = "+" if float(delta) >= 0 else ""
-        chips.append(chip(f"{sign}{float(delta):.1f}/10 adjustment", "chip chip-soft"))
-    chips.append(chip(f"confidence: {confidence}", "chip chip-soft"))
+        chips.append(chip(f"{sign}{float(delta):.1f}/10 {ui_text(ui_text_map, 'adjustment')}", "chip chip-soft"))
+    chips.append(chip(f"{ui_text(ui_text_map, 'confidence')}: {confidence}", "chip chip-soft"))
 
     return html.Div(
         className="public-signal",
         children=[
-            html.Div("Public review signal", className="section-label"),
+            html.Div(ui_text(ui_text_map, "public_review_signal"), className="section-label"),
             html.Div(className="public-signal-chips", children=chips),
             html.Div(
                 className="public-themes",
                 children=[chip(theme, "chip chip-soft") for theme in themes[:4]]
-                or [chip(signal.get("notes") or "No review themes found", "chip chip-warning")],
+                or [chip(signal.get("notes") or ui_text(ui_text_map, "no_review_themes"), "chip chip-warning")],
             ),
             html.A(
-                "Open public source",
+                ui_text(ui_text_map, "open_public_source"),
                 href=url,
                 target="_blank",
                 rel="noreferrer",
@@ -406,7 +568,11 @@ def _leaflet_zoom(span: float) -> int:
     return 5
 
 
-def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> dcc.Graph:
+def render_plotly_candidate_map(
+    location: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    ui_text_map: dict[str, str] | None = None,
+) -> dcc.Graph:
     lats = [candidate.get("latitude") for candidate in candidates]
     lons = [candidate.get("longitude") for candidate in candidates]
     names = [candidate.get("name") for candidate in candidates]
@@ -426,11 +592,11 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
                 [line for line in [
                     f"<b>{candidate.get('name') or 'Unnamed facility'}</b>",
                     f"Distance: {candidate.get('distance_km', 0):.1f} km",
-                    f"Score: {_score_text(candidate.get('score'))}",
-                    f"Base score: {_score_text(base_score)}" if base_score is not None else "",
+                    f"{ui_text(ui_text_map, 'score')}: {_score_text(candidate.get('score'))}",
+                    f"{ui_text(ui_text_map, 'base')} {_score_text(base_score)}" if base_score is not None else "",
                     rating_label,
-                    f"Type: {candidate.get('facility_type') or 'facility'}",
-                    f"Evidence: {evidence_label}",
+                    f"{ui_text(ui_text_map, 'type')}: {candidate.get('facility_type') or ui_text(ui_text_map, 'facility')}",
+                    f"{ui_text(ui_text_map, 'evidence')}: {evidence_label}",
                 ] if line]
             )
         )
@@ -453,7 +619,7 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
                 "line": {"width": 1, "color": "#ffffff"},
                 "colorbar": {"title": "Score /10", "thickness": 12},
             },
-            name="Candidate facilities",
+            name=ui_text(ui_text_map, "candidate_facilities"),
             customdata=candidate_ids,
         )
     )
@@ -462,12 +628,12 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
             lat=[location.get("latitude")],
             lon=[location.get("longitude")],
             mode="markers+text",
-            text=["Search origin"],
+            text=[ui_text(ui_text_map, "search_origin")],
             textposition="bottom center",
-            hovertext=[f"<b>{location.get('label') or 'Search origin'}</b><br>{location.get('method') or ''}"],
+            hovertext=[f"<b>{location.get('label') or ui_text(ui_text_map, 'search_origin')}</b><br>{location.get('method') or ''}"],
             hoverinfo="text",
             marker={"size": 16, "color": "#b91c1c", "symbol": "star", "line": {"width": 1, "color": "#ffffff"}},
-            name="Search origin",
+            name=ui_text(ui_text_map, "search_origin"),
         )
     )
 
@@ -509,9 +675,13 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
     )
 
 
-def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> Any:
+def render_leaflet_candidate_map(
+    location: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    ui_text_map: dict[str, str] | None = None,
+) -> Any:
     if dl is None:
-        return render_plotly_candidate_map(location, candidates)
+        return render_plotly_candidate_map(location, candidates, ui_text_map)
 
     points = _candidate_points(candidates)
     origin_lat = _safe_float(location.get("latitude"))
@@ -538,13 +708,13 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
         position=[origin_lat, origin_lon],
         title=location.get("label") or "Search origin",
         children=[
-            dl.Tooltip(location.get("label") or "Search origin", sticky=True),
+            dl.Tooltip(location.get("label") or ui_text(ui_text_map, "search_origin"), sticky=True),
             dl.Popup(
                 html.Div(
                     className="leaflet-popup-content",
                     children=[
-                        html.Strong(location.get("label") or "Search origin"),
-                        html.Div(location.get("method") or "Resolved search origin", className="muted"),
+                        html.Strong(location.get("label") or ui_text(ui_text_map, "search_origin")),
+                        html.Div(location.get("method") or ui_text(ui_text_map, "resolved_search_origin"), className="muted"),
                     ],
                 )
             ),
@@ -561,8 +731,8 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
         evidence_terms = []
         for item in candidate.get("evidence", [])[:3]:
             evidence_terms.extend(item.get("terms", [])[:3])
-        evidence_label = ", ".join(dict.fromkeys(evidence_terms)) or "No direct evidence"
-        rating_label = _rating_text(candidate.get("public_signal"))
+        evidence_label = ", ".join(dict.fromkeys(evidence_terms)) or ui_text(ui_text_map, "no_direct_evidence_terms")
+        rating_label = _rating_text(candidate.get("public_signal"), ui_text_map)
         color = _score_color(score)
 
         line_layers.append(
@@ -579,10 +749,10 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
                 id={"type": "leaflet-facility-marker", "index": candidate_id},
                 position=[candidate["_lat"], candidate["_lon"]],
                 icon=_numbered_marker_icon(idx, score),
-                title=f"#{idx} {name} - {float(distance or 0):.1f} km - score {_score_text(score)}",
+                title=f"#{idx} {name} - {float(distance or 0):.1f} km - {ui_text(ui_text_map, 'score')} {_score_text(score)}",
                 children=[
                     dl.Tooltip(
-                        f"#{idx} {name} - {float(distance or 0):.1f} km - score {_score_text(score)}",
+                        f"#{idx} {name} - {float(distance or 0):.1f} km - {ui_text(ui_text_map, 'score')} {_score_text(score)}",
                         sticky=True,
                     ),
                     dl.Popup(
@@ -591,10 +761,13 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
                             children=[
                                 html.Div(f"#{idx}", className="rank leaflet-rank"),
                                 html.Strong(name),
-                                html.Div(f"{float(distance or 0):.1f} km away - score {_score_text(score)}"),
+                                html.Div(
+                                    f"{float(distance or 0):.1f} {ui_text(ui_text_map, 'km_away')} - "
+                                    f"{ui_text(ui_text_map, 'score')} {_score_text(score)}"
+                                ),
                                 html.Div(rating_label, className="leaflet-rating") if rating_label else None,
-                                html.Div(candidate.get("facility_type") or "facility", className="muted"),
-                                html.Div(f"Evidence: {evidence_label}", className="leaflet-evidence"),
+                                html.Div(candidate.get("facility_type") or ui_text(ui_text_map, "facility"), className="muted"),
+                                html.Div(f"{ui_text(ui_text_map, 'evidence')}: {evidence_label}", className="leaflet-evidence"),
                             ],
                         )
                     ),
@@ -622,53 +795,64 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
     )
 
 
-def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> Any:
+def render_candidate_map(
+    location: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    ui_text_map: dict[str, str] | None = None,
+) -> Any:
     if _env_enabled("ENABLE_LEAFLET_MAP", "true"):
-        return render_leaflet_candidate_map(location, candidates)
-    return render_plotly_candidate_map(location, candidates)
+        return render_leaflet_candidate_map(location, candidates, ui_text_map)
+    return render_plotly_candidate_map(location, candidates, ui_text_map)
 
 
-def render_map_selection(candidate: dict[str, Any] | None = None) -> html.Div:
+def render_map_selection(
+    candidate: dict[str, Any] | None = None,
+    ui_text_map: dict[str, str] | None = None,
+) -> html.Div:
     if not candidate:
-        return html.Div("Click a facility marker to inspect details.", className="muted")
+        return html.Div(ui_text(ui_text_map, "click_facility"), className="muted")
 
     evidence_terms: list[str] = []
     for item in candidate.get("evidence", [])[:3]:
         evidence_terms.extend(item.get("terms", [])[:4])
     evidence_terms = list(dict.fromkeys(evidence_terms))
-    rating_label = _rating_text(candidate.get("public_signal"))
+    rating_label = _rating_text(candidate.get("public_signal"), ui_text_map)
 
     return html.Div(
         className="map-selection-card",
         children=[
-            html.Div("Selected facility", className="section-label"),
+            html.Div(ui_text(ui_text_map, "selected_facility"), className="section-label"),
             html.H3(candidate.get("name") or "Unnamed facility"),
             html.Div(
                 className="candidate-meta",
                 children=[
                     chip(f"{candidate.get('distance_km', 0):.1f} km"),
-                    chip(f"score {_score_text(candidate.get('score'))}"),
+                    chip(f"{ui_text(ui_text_map, 'score')} {_score_text(candidate.get('score'))}"),
                     chip(rating_label, "chip chip-ok") if rating_label else None,
-                    chip(candidate.get("facility_type") or "facility"),
+                    chip(candidate.get("facility_type") or ui_text(ui_text_map, "facility")),
                 ],
             ),
             html.Div(
                 className="warning-list",
                 children=[chip(term, "chip chip-soft") for term in evidence_terms[:6]]
-                or [chip("No direct evidence terms", "chip chip-warning")],
+                or [chip(ui_text(ui_text_map, "no_direct_evidence_terms"), "chip chip-warning")],
             ),
         ],
     )
 
 
-def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
+def render_candidate(
+    candidate: dict[str, Any],
+    rank: int,
+    ui_text_map: dict[str, str] | None = None,
+) -> html.Article:
     suspicious = candidate.get("missing_or_suspicious") or []
     evidence = candidate.get("evidence") or []
     signal = candidate.get("public_signal") or {}
     rating_url = signal.get("rating_url") if _is_http_url(signal.get("rating_url")) else ""
     source_url = rating_url or _first_http_url(candidate.get("source_urls") or [])
     website_url = str(candidate.get("website") or "").strip()
-    source_label = "Public source" if rating_url else "Source"
+    source_label = ui_text(ui_text_map, "public_source") if rating_url else ui_text(ui_text_map, "source")
     has_public_signal = bool(signal)
     base_score = _safe_float(candidate.get("base_score"))
     contact_bits = []
@@ -679,10 +863,10 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
         contact_bits.append(chip(candidate["email"], "chip chip-soft"))
     if _is_http_url(website_url):
         contact_bits.append(
-            html.A("Website", href=website_url, target="_blank", rel="noreferrer", className="chip chip-link")
+            html.A(ui_text(ui_text_map, "website"), href=website_url, target="_blank", rel="noreferrer", className="chip chip-link")
         )
     else:
-        contact_bits.append(chip("Website unavailable", "chip chip-soft chip-disabled"))
+        contact_bits.append(chip(ui_text(ui_text_map, "website_unavailable"), "chip chip-soft chip-disabled"))
     if source_url:
         contact_bits.append(
             html.A(source_label, href=source_url, target="_blank", rel="noreferrer", className="chip chip-link")
@@ -699,7 +883,11 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
                         className="score-stack",
                         children=[
                             html.Strong(f"{_score_value(candidate.get('score')):.1f}"),
-                            html.Span("/10 adjusted" if has_public_signal else "/10 score"),
+                            html.Span(
+                                f"/10 {ui_text(ui_text_map, 'adjusted')}"
+                                if has_public_signal
+                                else f"/10 {ui_text(ui_text_map, 'score')}"
+                            ),
                         ],
                     ),
                 ],
@@ -708,38 +896,38 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
                 className="candidate-meta",
                 children=[
                     chip(f"{candidate.get('distance_km', 0):.1f} km"),
-                    chip(f"base {_score_text(base_score)}", "chip chip-soft") if base_score is not None else None,
-                    chip(_rating_text(candidate.get("public_signal")), "chip chip-ok")
-                    if _rating_text(candidate.get("public_signal"))
+                    chip(f"{ui_text(ui_text_map, 'base')} {_score_text(base_score)}", "chip chip-soft") if base_score is not None else None,
+                    chip(_rating_text(candidate.get("public_signal"), ui_text_map), "chip chip-ok")
+                    if _rating_text(candidate.get("public_signal"), ui_text_map)
                     else None,
-                    chip(candidate.get("facility_type") or "facility"),
-                    chip(candidate.get("operator_type") or "operator unknown"),
-                    chip(candidate.get("city_state") or "location unknown"),
+                    chip(candidate.get("facility_type") or ui_text(ui_text_map, "facility")),
+                    chip(candidate.get("operator_type") or ui_text(ui_text_map, "operator_unknown")),
+                    chip(candidate.get("city_state") or ui_text(ui_text_map, "location_unknown")),
                 ],
             ),
-            html.Div(className="section-label", children="Matching evidence"),
-            html.Div(className="evidence-list", children=render_evidence(evidence)),
-            render_public_signal(candidate) if candidate.get("public_signal") else None,
-            html.Div(className="section-label warning-label", children="Missing or suspicious evidence"),
+            html.Div(className="section-label", children=ui_text(ui_text_map, "matching_evidence")),
+            html.Div(className="evidence-list", children=render_evidence(evidence, ui_text_map)),
+            render_public_signal(candidate, ui_text_map) if candidate.get("public_signal") else None,
+            html.Div(className="section-label warning-label", children=ui_text(ui_text_map, "missing_evidence")),
             html.Div(
                 className="warning-list",
                 children=[chip(item, "chip chip-warning") for item in suspicious[:8]]
-                or [chip("No obvious evidence gaps detected", "chip chip-ok")],
+                or [chip(ui_text(ui_text_map, "no_evidence_gaps"), "chip chip-ok")],
             ),
             html.Div(className="candidate-contact", children=contact_bits),
             html.Div(
                 className="candidate-actions",
                 children=[
-                    html.Button("Call", className="mini-action-button", title="Placeholder for future call workflow"),
+                    html.Button(ui_text(ui_text_map, "call"), className="mini-action-button", title="Placeholder for future call workflow"),
                     html.Button(
-                        "Schedule",
+                        ui_text(ui_text_map, "schedule"),
                         className="mini-action-button mini-action-button--primary",
                         title="Placeholder for future scheduling workflow",
                     ),
                 ],
             ),
             html.Button(
-                "Save",
+                ui_text(ui_text_map, "save"),
                 id={"type": "save-candidate", "index": candidate["candidate_id"]},
                 className="secondary-button",
             ),
@@ -752,6 +940,7 @@ def render_results(
     location: dict[str, Any],
     candidates: list[dict[str, Any]],
     data_notes: list[str],
+    ui_text_map: dict[str, str] | None = None,
 ) -> html.Div:
     if not candidates:
         return html.Div(
@@ -764,10 +953,12 @@ def render_results(
 
     parsed_terms = parsed.get("required_terms") or []
     location_note = (
-        f"{location.get('label')} via {location.get('method')} ({location.get('match_count', 0)} matches)"
+        f"{location.get('label')} {ui_text(ui_text_map, 'via')} "
+        f"{location.get('method')} ({location.get('match_count', 0)} {ui_text(ui_text_map, 'matches')})"
     )
     nearest = min(candidates, key=lambda candidate: candidate.get("distance_km", 10**9))
     highest = max(candidates, key=lambda candidate: candidate.get("score", -10**9))
+    notes_to_show = visible_data_notes(data_notes, location.get("warnings", []))
 
     return html.Div(
         className="results-shell",
@@ -775,68 +966,68 @@ def render_results(
             html.Div(
                 className="search-summary",
                 children=[
-                    html.Div([html.Span("Need", className="summary-label"), html.Strong(parsed.get("care_need") or "unknown")]),
-                    html.Div([html.Span("Location", className="summary-label"), html.Strong(location_note)]),
-                    html.Div([html.Span("Terms", className="summary-label"), html.Strong(", ".join(parsed_terms[:8]) or "none")]),
+                    html.Div([html.Span(ui_text(ui_text_map, "need"), className="summary-label"), html.Strong(parsed.get("care_need") or ui_text(ui_text_map, "unknown"))]),
+                    html.Div([html.Span(ui_text(ui_text_map, "location"), className="summary-label"), html.Strong(location_note)]),
+                    html.Div([html.Span(ui_text(ui_text_map, "terms"), className="summary-label"), html.Strong(", ".join(parsed_terms[:8]) or ui_text(ui_text_map, "none"))]),
                 ],
             ),
             html.Div(
                 className="data-notes",
-                children=[chip(note, "chip chip-soft") for note in data_notes[:4] + location.get("warnings", [])[:4]],
-            ),
+                children=[chip(note, "chip chip-soft") for note in notes_to_show[:4]],
+            ) if notes_to_show else None,
             html.Div(
                 className="map-panel",
                 children=[
                     html.Div(
                         className="map-header",
                         children=[
-                            html.H2("Referral Map"),
-                            html.Span("Leaflet view: drag, zoom, open popups, and click markers for evidence."),
+                            html.H2(ui_text(ui_text_map, "referral_map")),
+                            html.Span(ui_text(ui_text_map, "map_instruction")),
                         ],
                     ),
-                    render_candidate_map(location, candidates),
+                    render_candidate_map(location, candidates, ui_text_map),
                     html.Div(
                         className="map-inspector",
                         children=[
                             html.Div(
                                 className="map-stats",
                                 children=[
-                                    chip(f"{len(candidates)} mapped facilities", "chip chip-soft"),
+                                    chip(f"{len(candidates)} {ui_text(ui_text_map, 'mapped_facilities')}", "chip chip-soft"),
                                     chip(
-                                        f"nearest: {nearest.get('name')} ({nearest.get('distance_km', 0):.1f} km)",
+                                        f"{ui_text(ui_text_map, 'nearest')}: {nearest.get('name')} ({nearest.get('distance_km', 0):.1f} km)",
                                         "chip chip-soft",
                                     ),
                                     chip(
-                                        f"top score: {highest.get('name')} ({_score_text(highest.get('score'))})",
+                                        f"{ui_text(ui_text_map, 'top_score')}: {highest.get('name')} ({_score_text(highest.get('score'))})",
                                         "chip chip-soft",
                                     ),
                                 ],
                             ),
-                            html.Div(id="map-selection-panel", children=render_map_selection(candidates[0])),
+                            html.Div(id="map-selection-panel", children=render_map_selection(candidates[0], ui_text_map)),
                         ],
                     ),
                 ],
             ),
             html.Div(
                 className="candidate-list",
-                children=[render_candidate(candidate, idx + 1) for idx, candidate in enumerate(candidates)],
+                children=[render_candidate(candidate, idx + 1, ui_text_map) for idx, candidate in enumerate(candidates)],
             ),
         ],
     )
 
 
-def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
+def render_shortlist(shortlist: list[dict[str, Any]] | None, ui_text_map: dict[str, str] | None = None) -> html.Div:
     shortlist = shortlist or []
     if not shortlist:
-        return html.Div("No saved facilities yet.", className="muted")
+        return html.Div(ui_text(ui_text_map, "no_saved_facilities"), className="muted")
 
     def item_summary(item: dict[str, Any]) -> str:
         base_score = _safe_float(item.get("base_score"))
         parts = [
             f"{item.get('distance_km', 0):.1f} km",
-            f"score {_score_text(item.get('score'))}",
-            f"base {_score_text(base_score)}" if base_score is not None else "",
-            _rating_text(item.get("public_signal")),
+            f"{ui_text(ui_text_map, 'score')} {_score_text(item.get('score'))}",
+            f"{ui_text(ui_text_map, 'base')} {_score_text(base_score)}" if base_score is not None else "",
+            _rating_text(item.get("public_signal"), ui_text_map),
         ]
         return " - ".join(part for part in parts if part)
 
@@ -855,14 +1046,14 @@ def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
     )
 
 
-def render_chat_history(history: list[dict[str, Any]] | None) -> html.Div:
+def render_chat_history(history: list[dict[str, Any]] | None, ui_text_map: dict[str, str] | None = None) -> html.Div:
     history = history or []
     if not history:
         return html.Div(
             className="chat-empty",
             children=[
-                html.Strong("Shortlist copilot"),
-                html.Span("Save hospitals, then ask about tradeoffs, gaps, contact checks, or what to verify next."),
+                html.Strong(ui_text(ui_text_map, "chat_empty_title")),
+                html.Span(ui_text(ui_text_map, "chat_empty_body")),
             ],
         )
 
@@ -875,8 +1066,8 @@ def render_chat_history(history: list[dict[str, Any]] | None) -> html.Div:
                     html.Div(
                         className="chat-meta",
                         children=[
-                            html.Span("You" if message.get("role") == "user" else "Copilot"),
-                            chip("web checked", "chip chip-ok") if message.get("used_search") else None,
+                            html.Span(ui_text(ui_text_map, "you") if message.get("role") == "user" else ui_text(ui_text_map, "copilot")),
+                            chip(ui_text(ui_text_map, "web_checked"), "chip chip-ok") if message.get("used_search") else None,
                         ],
                     ),
                     dcc.Markdown(message.get("content") or "", className="chat-markdown", link_target="_blank"),
@@ -893,6 +1084,7 @@ app.layout = html.Div(
     className="app-shell",
     children=[
         dcc.Store(id="candidate-store", data=[]),
+        dcc.Store(id="result-ui-text-store", data=DEFAULT_RESULT_UI_TEXT),
         dcc.Store(id="shortlist-store", data=[]),
         dcc.Store(id="geolocation-store", data=None),
         dcc.Store(id="search-mode-store", data="freetext"),
@@ -904,10 +1096,24 @@ app.layout = html.Div(
         html.Header(
             className="app-header",
             children=[
-                html.Div([html.H1(APP_TITLE), html.P("Evidence-attached care facility shortlists.")]),
+                html.Div([html.H1(APP_TITLE, id="app-title"), html.P("Evidence-attached care facility shortlists.", id="app-subtitle")]),
                 html.Div(
                     className="header-actions",
                     children=[
+                        html.Div(
+                            className="header-language-control",
+                            children=[
+                                html.Label("Language", id="global-language-label", htmlFor="language-select"),
+                                dcc.Dropdown(
+                                    id="language-select",
+                                    value="English",
+                                    options=LANGUAGE_OPTIONS,
+                                    clearable=False,
+                                    searchable=False,
+                                    className="select-input header-language-select",
+                                ),
+                            ],
+                        ),
                         html.Button("Dark", id="theme-toggle", className="theme-toggle", n_clicks=0),
                         html.Div(className="status-pill", children=os.getenv("DATABRICKS_SCHEMA", "local data")),
                     ],
@@ -925,8 +1131,8 @@ app.layout = html.Div(
                         html.Div(
                             className="panel-heading",
                             children=[
-                                html.H2("Find a facility"),
-                                html.P("Choose a search mode, describe what you need, then hit Search."),
+                                html.H2("Find a facility", id="find-facility-title"),
+                                html.P("Choose a search mode, describe what you need, then hit Search.", id="find-facility-help"),
                             ],
                         ),
                         # Mode tab strip
@@ -934,19 +1140,19 @@ app.layout = html.Div(
                             className="mode-tabs",
                             children=[
                                 html.Button(
-                                    [html.Span("Free text")],
+                                    [html.Span("Free text", id="mode-freetext-label")],
                                     id="mode-tab-freetext",
                                     className="mode-tab mode-tab--active",
                                     n_clicks=0,
                                 ),
                                 html.Button(
-                                    [html.Span("Pin code")],
+                                    [html.Span("Pin code", id="mode-pincode-label")],
                                     id="mode-tab-pincode",
                                     className="mode-tab",
                                     n_clicks=0,
                                 ),
                                 html.Button(
-                                    [html.Span("My location")],
+                                    [html.Span("My location", id="mode-location-label")],
                                     id="mode-tab-location",
                                     className="mode-tab",
                                     n_clicks=0,
@@ -962,10 +1168,12 @@ app.layout = html.Div(
                                     "Care need + location",
                                     htmlFor="query-input",
                                     className="input-label",
+                                    id="query-label",
                                 ),
                                 html.P(
                                     'e.g. "dialysis near Jaipur" or "emergency surgery near 380007"',
                                     className="input-hint",
+                                    id="query-hint",
                                 ),
                                 dcc.Input(
                                     id="query-input",
@@ -986,6 +1194,7 @@ app.layout = html.Div(
                                     "Care need",
                                     htmlFor="care-need-pincode",
                                     className="input-label",
+                                    id="care-need-pincode-label",
                                 ),
                                 dcc.Input(
                                     id="care-need-pincode",
@@ -999,8 +1208,9 @@ app.layout = html.Div(
                                     htmlFor="pincode-input",
                                     className="input-label",
                                     style={"marginTop": "14px"},
+                                    id="pincode-label",
                                 ),
-                                html.P("Your 6-digit postal pin code", className="input-hint"),
+                                html.P("Your 6-digit postal pin code", className="input-hint", id="pincode-hint"),
                                 dcc.Input(
                                     id="pincode-input",
                                     type="text",
@@ -1020,6 +1230,7 @@ app.layout = html.Div(
                                     "Care need",
                                     htmlFor="care-need-location",
                                     className="input-label",
+                                    id="care-need-location-label",
                                 ),
                                 dcc.Input(
                                     id="care-need-location",
@@ -1061,7 +1272,7 @@ app.layout = html.Div(
                             className="controls-row",
                             children=[
                                 html.Div([
-                                    html.Label("Search radius km", htmlFor="radius-input"),
+                                    html.Label("Search radius km", htmlFor="radius-input", id="radius-label"),
                                     dcc.Dropdown(
                                         id="radius-input",
                                         value=250,
@@ -1079,7 +1290,7 @@ app.layout = html.Div(
                                     ),
                                 ]),
                                 html.Div([
-                                    html.Label("Max results", htmlFor="limit-input"),
+                                    html.Label("Max results", htmlFor="limit-input", id="limit-label"),
                                     dcc.Dropdown(
                                         id="limit-input",
                                         value=8,
@@ -1096,20 +1307,6 @@ app.layout = html.Div(
                                         className="select-input",
                                     ),
                                 ]),
-                            ],
-                        ),
-                        html.Div(
-                            className="language-control",
-                            children=[
-                                html.Label("Result language", htmlFor="language-select"),
-                                dcc.Dropdown(
-                                    id="language-select",
-                                    value="English",
-                                    options=LANGUAGE_OPTIONS,
-                                    clearable=False,
-                                    searchable=False,
-                                    className="select-input",
-                                ),
                             ],
                         ),
                         html.Button("Search", id="search-button", className="primary-button"),
@@ -1137,7 +1334,7 @@ app.layout = html.Div(
                         html.Div(
                             className="shortlist-header",
                             children=[
-                                html.H2("Shortlist"),
+                                html.H2("Shortlist", id="shortlist-title"),
                                 html.Button("Clear", id="clear-shortlist", className="ghost-button"),
                             ],
                         ),
@@ -1149,8 +1346,8 @@ app.layout = html.Div(
                                 html.Div(
                                     className="chat-heading",
                                     children=[
-                                        html.H2("Ask Copilot"),
-                                        html.P("Saved facilities become context. Web search runs when current details matter."),
+                                        html.H2("Ask Copilot", id="chat-title"),
+                                        html.P("Saved facilities become context. Web search runs when current details matter.", id="chat-help"),
                                     ],
                                 ),
                                 html.Div(
@@ -1209,6 +1406,7 @@ app.layout = html.Div(
         ),
         html.Footer(
             className="app-footer",
+            id="app-footer",
             children="Referral support only. Verify availability, clinical fit, insurance, and emergency status before sending a patient.",
         ),
     ],
@@ -1239,13 +1437,107 @@ app.clientside_callback(
     Output("theme-toggle", "children"),
     Input("theme-toggle", "n_clicks"),
     State("theme-store", "data"),
+    State("result-ui-text-store", "data"),
 )
-def toggle_theme(n_clicks: int | None, current_theme: str | None):
+def toggle_theme(n_clicks: int | None, current_theme: str | None, ui_text_map: dict[str, str] | None):
     if not n_clicks:
         theme = current_theme or "light"
     else:
         theme = "dark" if (current_theme or "light") == "light" else "light"
-    return theme, f"app-shell theme-{theme}", "Light" if theme == "dark" else "Dark"
+    return theme, f"app-shell theme-{theme}", ui_text(ui_text_map, "light") if theme == "dark" else ui_text(ui_text_map, "dark")
+
+
+@app.callback(
+    Output("result-ui-text-store", "data", allow_duplicate=True),
+    Output("app-title", "children"),
+    Output("app-subtitle", "children"),
+    Output("global-language-label", "children"),
+    Output("theme-toggle", "children", allow_duplicate=True),
+    Output("find-facility-title", "children"),
+    Output("find-facility-help", "children"),
+    Output("mode-freetext-label", "children"),
+    Output("mode-pincode-label", "children"),
+    Output("mode-location-label", "children"),
+    Output("query-label", "children"),
+    Output("query-hint", "children"),
+    Output("query-input", "placeholder"),
+    Output("care-need-pincode-label", "children"),
+    Output("care-need-pincode", "placeholder"),
+    Output("pincode-label", "children"),
+    Output("pincode-hint", "children"),
+    Output("care-need-location-label", "children"),
+    Output("care-need-location", "placeholder"),
+    Output("locate-button", "children"),
+    Output("locate-button", "title"),
+    Output("apply-suggestion-btn", "children"),
+    Output("radius-label", "children"),
+    Output("limit-label", "children"),
+    Output("search-button", "children"),
+    Output("shortlist-title", "children"),
+    Output("clear-shortlist", "children"),
+    Output("download-shortlist", "children"),
+    Output("chat-title", "children"),
+    Output("chat-help", "children"),
+    Output({"type": "chat-preset", "index": ALL}, "children"),
+    Output("chat-history", "children", allow_duplicate=True),
+    Output("chat-input", "placeholder"),
+    Output("chat-submit", "children"),
+    Output("shortlist-panel-body", "children", allow_duplicate=True),
+    Output("results-panel", "children", allow_duplicate=True),
+    Output("app-footer", "children"),
+    Input("language-select", "value"),
+    State("theme-store", "data"),
+    State("shortlist-store", "data"),
+    State("chat-history-store", "data"),
+    State("candidate-store", "data"),
+    prevent_initial_call=True,
+)
+def update_app_language(language, current_theme, shortlist, history, candidates):
+    translated_ui, _note = translate_ui_text(DEFAULT_RESULT_UI_TEXT, language or "English")
+    preset_labels = [
+        ui_text(translated_ui, item.get("label_key", ""))
+        for item in CHAT_PROMPTS
+    ]
+    results_panel = no_update if candidates else render_empty_state(translated_ui)
+    return (
+        translated_ui,
+        ui_text(translated_ui, "app_title"),
+        ui_text(translated_ui, "app_subtitle"),
+        ui_text(translated_ui, "language"),
+        ui_text(translated_ui, "light") if (current_theme or "light") == "dark" else ui_text(translated_ui, "dark"),
+        ui_text(translated_ui, "find_facility"),
+        ui_text(translated_ui, "find_facility_help"),
+        ui_text(translated_ui, "mode_freetext"),
+        ui_text(translated_ui, "mode_pincode"),
+        ui_text(translated_ui, "mode_location"),
+        ui_text(translated_ui, "care_need_location"),
+        ui_text(translated_ui, "query_hint"),
+        ui_text(translated_ui, "query_placeholder"),
+        ui_text(translated_ui, "care_need_label"),
+        ui_text(translated_ui, "care_need_placeholder"),
+        ui_text(translated_ui, "pin_code"),
+        ui_text(translated_ui, "pin_hint"),
+        ui_text(translated_ui, "care_need_label"),
+        ui_text(translated_ui, "care_need_placeholder"),
+        ui_text(translated_ui, "use_my_location"),
+        ui_text(translated_ui, "use_location_title"),
+        ui_text(translated_ui, "use_this"),
+        ui_text(translated_ui, "search_radius_km"),
+        ui_text(translated_ui, "max_results"),
+        ui_text(translated_ui, "global_search"),
+        ui_text(translated_ui, "shortlist"),
+        ui_text(translated_ui, "clear"),
+        ui_text(translated_ui, "download_csv"),
+        ui_text(translated_ui, "ask_copilot"),
+        ui_text(translated_ui, "chat_help"),
+        preset_labels,
+        render_chat_history(history, translated_ui),
+        ui_text(translated_ui, "chat_placeholder"),
+        ui_text(translated_ui, "ask_copilot_button"),
+        render_shortlist(shortlist, translated_ui),
+        results_panel,
+        ui_text(translated_ui, "footer"),
+    )
 
 
 app.clientside_callback(
@@ -1386,8 +1678,10 @@ app.clientside_callback(
 @app.callback(
     Output("results-panel", "children"),
     Output("candidate-store", "data"),
+    Output("result-ui-text-store", "data"),
     Output("search-status", "children"),
     Input("search-button", "n_clicks"),
+    Input("language-select", "value"),
     State("search-mode-store", "data"),
     State("query-input", "value"),
     State("care-need-pincode", "value"),
@@ -1395,12 +1689,13 @@ app.clientside_callback(
     State("care-need-location", "value"),
     State("radius-input", "value"),
     State("limit-input", "value"),
-    State("language-select", "value"),
     State("geolocation-store", "data"),
+    State("result-ui-text-store", "data"),
     prevent_initial_call=True,
 )
 def run_search(
     n_clicks: int,
+    display_language: str,
     mode: str,
     query: str,
     care_need_pin: str,
@@ -1408,13 +1703,20 @@ def run_search(
     care_need_loc: str,
     radius_km: int,
     limit: int,
-    display_language: str,
     geolocation_data: dict | None,
+    current_ui_text: dict[str, str] | None,
 ):
     mode = mode or "freetext"
 
+    if ctx.triggered_id == "language-select" and not n_clicks:
+        ui_map, _ = translate_ui_text(DEFAULT_RESULT_UI_TEXT, display_language or "English")
+        return no_update, no_update, ui_map, ui_text(ui_map, "click_search_language")
+
     try:
         datasets, data_notes = load_datasets()
+        result_ui_text = dict(current_ui_text or DEFAULT_RESULT_UI_TEXT)
+        if (display_language or "English").strip().lower() != "english" and result_ui_text.get("global_search") == DEFAULT_RESULT_UI_TEXT["global_search"]:
+            result_ui_text, _ = translate_ui_text(DEFAULT_RESULT_UI_TEXT, display_language or "English")
         correction_note = ""
         try:
             radius_value = float(radius_km if radius_km not in (None, "") else 250)
@@ -1432,7 +1734,7 @@ def run_search(
         if mode == "freetext":
             raw_query = (query or "").strip()
             if not raw_query:
-                return render_empty_state(), [], "Enter a care need and location."
+                return render_empty_state(result_ui_text), [], result_ui_text, ui_text(result_ui_text, "enter_need_location")
 
             location_hint = _extract_location_hint(raw_query)
             if location_hint and len(location_hint) >= 3:
@@ -1466,7 +1768,7 @@ def run_search(
             care_need = (care_need_pin or "").strip()
             pin = re.sub(r"\D", "", (pincode or ""))
             if not care_need:
-                return render_empty_state(), [], "Enter a care need."
+                return render_empty_state(result_ui_text), [], result_ui_text, ui_text(result_ui_text, "enter_care_need")
             if len(pin) != 6:
                 return (
                     html.Div(
@@ -1477,6 +1779,7 @@ def run_search(
                         ],
                     ),
                     [],
+                    result_ui_text,
                     "Enter a 6-digit pin code.",
                 )
             parsed = parse_referral_query(f"{care_need} near {pin}")
@@ -1485,7 +1788,7 @@ def run_search(
         elif mode == "location":
             care_need = (care_need_loc or "").strip()
             if not care_need:
-                return render_empty_state(), [], "Enter a care need."
+                return render_empty_state(result_ui_text), [], result_ui_text, ui_text(result_ui_text, "enter_care_need")
             gps = geolocation_data or {}
             if not gps.get("latitude") or gps.get("error"):
                 return (
@@ -1497,6 +1800,7 @@ def run_search(
                         ],
                     ),
                     [],
+                    result_ui_text,
                     "Tap 'Use My Location' first.",
                 )
             parsed = parse_referral_query(care_need)
@@ -1512,7 +1816,7 @@ def run_search(
             }
 
         else:
-            return render_empty_state(), [], "Unknown search mode."
+            return render_empty_state(result_ui_text), [], result_ui_text, "Unknown search mode."
 
         # Guard: location must resolve.
         if not location.get("latitude") or not location.get("longitude"):
@@ -1527,6 +1831,7 @@ def run_search(
                     ],
                 ),
                 [],
+                result_ui_text,
                 "Location could not be resolved from the current datasets.",
             )
 
@@ -1546,23 +1851,27 @@ def run_search(
             if public_note and re.search(r"\b(skipped|unavailable|rate-limited|returned no)\b", public_note, re.IGNORECASE):
                 data_notes = data_notes + [f"Public review signal: {public_note}"]
 
+        candidates = prepare_candidates_for_display(candidates)
         parsed_dict = parsed.to_dict()
         translation_note = None
         if candidates and (display_language or "English").strip().lower() != "english":
-            candidates, parsed_dict, translation_note = translate_referral_results(
+            candidates, parsed_dict, result_ui_text, translation_note = translate_referral_results(
                 candidates,
                 parsed_dict,
                 display_language or "English",
+                DEFAULT_RESULT_UI_TEXT,
             )
-        if translation_note and re.search(r"\b(skipped|unavailable|rate-limited|failed)\b", translation_note, re.IGNORECASE):
-            data_notes = data_notes + [translation_note]
 
         return (
-            render_results(parsed_dict, location, candidates, data_notes),
+            render_results(parsed_dict, location, candidates, data_notes, result_ui_text),
             candidates,
-            (
-                f"Found {len(candidates)} candidates within {radius_value:g} km "
-                f"(showing up to {limit_value}) using {parsed.source} parsing. {correction_note}"
+            result_ui_text,
+            ui_text(result_ui_text, "found_status").format(
+                count=len(candidates),
+                radius=f"{radius_value:g}",
+                limit=limit_value,
+                source=parsed.source,
+                note=correction_note,
             ).strip(),
         )
 
@@ -1573,6 +1882,7 @@ def run_search(
                 children=[html.H2("Search failed"), html.P(str(exc))],
             ),
             [],
+            DEFAULT_RESULT_UI_TEXT,
             "Search failed.",
         )
 
@@ -1582,23 +1892,24 @@ def run_search(
     Input("candidate-map", "clickData"),
     Input({"type": "leaflet-facility-marker", "index": ALL}, "n_clicks"),
     State("candidate-store", "data"),
+    State("result-ui-text-store", "data"),
     prevent_initial_call=True,
 )
-def update_map_selection(click_data, marker_clicks, candidates):
+def update_map_selection(click_data, marker_clicks, candidates, result_ui_text):
     candidates = candidates or []
 
     triggered = ctx.triggered_id
     if isinstance(triggered, dict) and triggered.get("type") == "leaflet-facility-marker":
         candidate_id = triggered.get("index")
         candidate = next((item for item in candidates if item.get("candidate_id") == candidate_id), None)
-        return render_map_selection(candidate or (candidates[0] if candidates else None))
+        return render_map_selection(candidate or (candidates[0] if candidates else None), result_ui_text)
 
     if not click_data or not click_data.get("points"):
-        return render_map_selection(candidates[0] if candidates else None)
+        return render_map_selection(candidates[0] if candidates else None, result_ui_text)
 
     candidate_id = click_data["points"][0].get("customdata")
     candidate = next((item for item in candidates if item.get("candidate_id") == candidate_id), None)
-    return render_map_selection(candidate or (candidates[0] if candidates else None))
+    return render_map_selection(candidate or (candidates[0] if candidates else None), result_ui_text)
 
 
 @app.callback(
@@ -1608,13 +1919,14 @@ def update_map_selection(click_data, marker_clicks, candidates):
     Input("clear-shortlist", "n_clicks"),
     State("candidate-store", "data"),
     State("shortlist-store", "data"),
+    State("result-ui-text-store", "data"),
     prevent_initial_call=True,
 )
-def update_shortlist(save_clicks, clear_clicks, candidates, shortlist):
+def update_shortlist(save_clicks, clear_clicks, candidates, shortlist, result_ui_text):
     triggered = ctx.triggered_id
 
     if triggered == "clear-shortlist":
-        return [], render_shortlist([])
+        return [], render_shortlist([], result_ui_text)
 
     if not isinstance(triggered, dict) or triggered.get("type") != "save-candidate":
         return no_update, no_update
@@ -1629,21 +1941,25 @@ def update_shortlist(save_clicks, clear_clicks, candidates, shortlist):
     if not any(item.get("candidate_id") == candidate_id for item in shortlist):
         shortlist = shortlist + [candidate]
 
-    return shortlist, render_shortlist(shortlist)
+    return shortlist, render_shortlist(shortlist, result_ui_text)
 
 
 @app.callback(
     Output("chat-input", "value", allow_duplicate=True),
     Input({"type": "chat-preset", "index": ALL}, "n_clicks"),
     State("chat-input", "value"),
+    State("result-ui-text-store", "data"),
     prevent_initial_call=True,
 )
-def apply_chat_preset(preset_clicks, current_value):
+def apply_chat_preset(preset_clicks, current_value, result_ui_text):
     triggered = ctx.triggered_id
     if not isinstance(triggered, dict) or triggered.get("type") != "chat-preset":
         return no_update
 
-    prompt_by_id = {item["id"]: item["prompt"] for item in CHAT_PROMPTS}
+    prompt_by_id = {
+        item["id"]: ui_text(result_ui_text, item.get("prompt_key", "")) or item["prompt"]
+        for item in CHAT_PROMPTS
+    }
     return prompt_by_id.get(triggered.get("index"), current_value or "")
 
 
@@ -1656,18 +1972,20 @@ def apply_chat_preset(preset_clicks, current_value):
     State("chat-input", "value"),
     State("shortlist-store", "data"),
     State("chat-history-store", "data"),
+    State("language-select", "value"),
+    State("result-ui-text-store", "data"),
     prevent_initial_call=True,
 )
-def ask_copilot(n_clicks, question, shortlist, history):
+def ask_copilot(n_clicks, question, shortlist, history, language, result_ui_text):
     question = (question or "").strip()
     history = history or []
     shortlist = shortlist or []
 
     if not question:
-        return no_update, no_update, no_update, "Ask a question about the saved shortlist."
+        return no_update, no_update, no_update, ui_text(result_ui_text, "chat_placeholder")
 
     user_message = {"role": "user", "content": question}
-    result = ask_shortlist_copilot(question, shortlist)
+    result = ask_shortlist_copilot(question, shortlist, language=language or "English")
     answer = result.get("answer") or "I could not produce an answer."
     assistant_message = {
         "role": "assistant",
@@ -1675,11 +1993,11 @@ def ask_copilot(n_clicks, question, shortlist, history):
         "used_search": bool(result.get("used_search")),
     }
     new_history = (history + [user_message, assistant_message])[-10:]
-    status = "Answered with web search." if result.get("used_search") else "Answered from shortlist evidence."
+    status = ui_text(result_ui_text, "answered_web") if result.get("used_search") else ui_text(result_ui_text, "answered_evidence")
     if result.get("error") and result.get("error") not in {"missing_api_key", "missing_openai_sdk"}:
-        status = "Answered without web search fallback."
+        status = ui_text(result_ui_text, "answered_fallback")
 
-    return new_history, render_chat_history(new_history), "", status
+    return new_history, render_chat_history(new_history, result_ui_text), "", status
 
 
 @app.callback(
