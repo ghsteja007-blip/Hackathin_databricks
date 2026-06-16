@@ -20,6 +20,7 @@ from openai_helpers import (
     parse_referral_query,
     spell_check_location,
     translate_referral_results,
+    translate_ui_text,
 )
 from referral_engine import rank_facilities, resolve_location
 
@@ -27,16 +28,16 @@ from referral_engine import rank_facilities, resolve_location
 APP_TITLE = "Referral Copilot"
 LANGUAGE_OPTIONS = [
     {"label": "English", "value": "English"},
-    {"label": "Hindi", "value": "Hindi"},
-    {"label": "Telugu", "value": "Telugu"},
-    {"label": "Tamil", "value": "Tamil"},
-    {"label": "Kannada", "value": "Kannada"},
-    {"label": "Malayalam", "value": "Malayalam"},
-    {"label": "Marathi", "value": "Marathi"},
-    {"label": "Bengali", "value": "Bengali"},
-    {"label": "Gujarati", "value": "Gujarati"},
-    {"label": "Punjabi", "value": "Punjabi"},
-    {"label": "Urdu", "value": "Urdu"},
+    {"label": "हिन्दी", "value": "Hindi"},
+    {"label": "తెలుగు", "value": "Telugu"},
+    {"label": "தமிழ்", "value": "Tamil"},
+    {"label": "ಕನ್ನಡ", "value": "Kannada"},
+    {"label": "മലയാളം", "value": "Malayalam"},
+    {"label": "मराठी", "value": "Marathi"},
+    {"label": "বাংলা", "value": "Bengali"},
+    {"label": "ગુજરાતી", "value": "Gujarati"},
+    {"label": "ਪੰਜਾਬੀ", "value": "Punjabi"},
+    {"label": "اردو", "value": "Urdu"},
 ]
 MEDICAL_DISPLAY_TERMS = [
     "dialysis",
@@ -89,26 +90,88 @@ NOISY_EVIDENCE_MARKERS = [
 CHAT_PROMPTS = [
     {
         "id": "compare",
+        "label_key": "chat_compare",
+        "prompt_key": "chat_compare_prompt",
         "label": "Compare saved",
         "prompt": "Compare the saved facilities and recommend the strongest referral option. Call out tradeoffs and what to verify.",
     },
     {
         "id": "verify",
+        "label_key": "chat_verify",
+        "prompt_key": "chat_verify_prompt",
         "label": "Verify contacts",
         "prompt": "Use web search if needed to check current contact details, website, and public information for the saved facilities.",
     },
     {
         "id": "risks",
+        "label_key": "chat_risks",
+        "prompt_key": "chat_risks_prompt",
         "label": "Evidence gaps",
         "prompt": "What evidence is missing or suspicious across the saved shortlist, and what should a coordinator verify before referral?",
     },
     {
         "id": "next",
+        "label_key": "chat_next",
+        "prompt_key": "chat_next_prompt",
         "label": "Next steps",
         "prompt": "Create a concise coordinator handoff plan for the saved shortlist, including calls to make and questions to ask.",
     },
 ]
 DEFAULT_RESULT_UI_TEXT = {
+    "app_title": "Referral Copilot",
+    "app_subtitle": "Evidence-attached care facility shortlists.",
+    "language": "Language",
+    "dark": "Dark",
+    "light": "Light",
+    "find_facility": "Find a facility",
+    "find_facility_help": "Choose a search mode, describe what you need, then hit Search.",
+    "mode_freetext": "Free text",
+    "mode_pincode": "Pin code",
+    "mode_location": "My location",
+    "care_need_location": "Care need + location",
+    "query_hint": 'e.g. "dialysis near Jaipur" or "emergency surgery near 380007"',
+    "query_placeholder": "dialysis near Jaipur",
+    "care_need_label": "Care need",
+    "care_need_placeholder": "e.g. dialysis, emergency surgery",
+    "pin_code": "Pin code",
+    "pin_hint": "Your 6-digit postal pin code",
+    "use_my_location": "Use My Location",
+    "use_location_title": "Use your device's GPS to set the search origin",
+    "use_this": "Use this",
+    "search_radius_km": "Search radius km",
+    "max_results": "Max results",
+    "global_search": "Search",
+    "shortlist": "Shortlist",
+    "clear": "Clear",
+    "no_saved_facilities": "No saved facilities yet.",
+    "download_csv": "Download CSV",
+    "ask_copilot": "Ask Copilot",
+    "chat_help": "Saved facilities become context. Web search runs when current details matter.",
+    "chat_empty_title": "Shortlist copilot",
+    "chat_empty_body": "Save hospitals, then ask about tradeoffs, gaps, contact checks, or what to verify next.",
+    "chat_placeholder": "Compare my shortlist, check evidence gaps, or look up current details...",
+    "ask_copilot_button": "Ask Copilot",
+    "chat_compare": "Compare saved",
+    "chat_verify": "Verify contacts",
+    "chat_risks": "Evidence gaps",
+    "chat_next": "Next steps",
+    "chat_compare_prompt": "Compare the saved facilities and recommend the strongest referral option. Call out tradeoffs and what to verify.",
+    "chat_verify_prompt": "Use web search if needed to check current contact details, website, and public information for the saved facilities.",
+    "chat_risks_prompt": "What evidence is missing or suspicious across the saved shortlist, and what should a coordinator verify before referral?",
+    "chat_next_prompt": "Create a concise coordinator handoff plan for the saved shortlist, including calls to make and questions to ask.",
+    "you": "You",
+    "copilot": "Copilot",
+    "web_checked": "web checked",
+    "footer": "Referral support only. Verify availability, clinical fit, insurance, and emergency status before sending a patient.",
+    "start_search": "Start a referral search",
+    "start_search_help": "Pick a search mode on the left, describe what you need, and click Search.",
+    "enter_need_location": "Enter a care need and location.",
+    "enter_care_need": "Enter a care need.",
+    "click_search_language": "Click Search to generate results in the selected language.",
+    "found_status": "Found {count} candidates within {radius} km (showing up to {limit}) using {source} parsing. {note}",
+    "answered_web": "Answered with web search.",
+    "answered_evidence": "Answered from shortlist evidence.",
+    "answered_fallback": "Answered without web search fallback.",
     "need": "Need",
     "location": "Location",
     "terms": "Terms",
@@ -219,13 +282,13 @@ def visible_data_notes(data_notes: list[str], warnings: list[str] | None = None)
     return visible
 
 
-def render_empty_state() -> html.Div:
+def render_empty_state(ui_text_map: dict[str, str] | None = None) -> html.Div:
     return html.Div(
         className="empty-state",
         children=[
-            html.H2("Start a referral search"),
+            html.H2(ui_text(ui_text_map, "start_search")),
             html.P(
-                "Pick a search mode on the left, describe what you need, and click Search."
+                ui_text(ui_text_map, "start_search_help")
             ),
         ],
     )
@@ -280,6 +343,20 @@ def _clean_evidence_snippet(field: str, snippet: str, terms: list[str]) -> str:
     return clean[:177].rstrip(" ,.;") + "..." if len(clean) > 180 else clean
 
 
+def prepare_candidates_for_display(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for candidate in candidates:
+        for item in candidate.get("evidence", []) or []:
+            if item.get("translated"):
+                continue
+            item["snippet"] = _clean_evidence_snippet(
+                str(item.get("field") or "evidence"),
+                item.get("snippet") or "",
+                item.get("terms", []) or [],
+            )
+            item["display_prepared"] = True
+    return candidates
+
+
 def render_evidence(items: list[dict[str, Any]], ui_text_map: dict[str, str] | None = None) -> list[html.Div]:
     if not items:
         return [html.Div(ui_text(ui_text_map, "no_direct_matching_evidence"), className="muted")]
@@ -288,11 +365,14 @@ def render_evidence(items: list[dict[str, Any]], ui_text_map: dict[str, str] | N
     for item in items[:6]:
         field = item.get("field", "evidence")
         label = ui_text(ui_text_map, f"field_{field}") if f"field_{field}" in DEFAULT_RESULT_UI_TEXT else field.replace("_", " ").title()
-        terms_list = [_display_label(_humanize_evidence_text(term).lower()) for term in item.get("terms", [])[:5]]
+        if item.get("translated"):
+            terms_list = [str(term).strip() for term in item.get("terms", [])[:5] if str(term).strip()]
+        else:
+            terms_list = [_display_label(_humanize_evidence_text(term).lower()) for term in item.get("terms", [])[:5]]
         terms = ", ".join(dict.fromkeys(terms_list))
         snippet = (
             str(item.get("snippet") or "").strip()
-            if item.get("translated")
+            if item.get("translated") or item.get("display_prepared")
             else _clean_evidence_snippet(field, item.get("snippet") or "", item.get("terms", []))
         )
         rendered.append(
@@ -936,18 +1016,18 @@ def render_results(
     )
 
 
-def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
+def render_shortlist(shortlist: list[dict[str, Any]] | None, ui_text_map: dict[str, str] | None = None) -> html.Div:
     shortlist = shortlist or []
     if not shortlist:
-        return html.Div("No saved facilities yet.", className="muted")
+        return html.Div(ui_text(ui_text_map, "no_saved_facilities"), className="muted")
 
     def item_summary(item: dict[str, Any]) -> str:
         base_score = _safe_float(item.get("base_score"))
         parts = [
             f"{item.get('distance_km', 0):.1f} km",
-            f"score {_score_text(item.get('score'))}",
-            f"base {_score_text(base_score)}" if base_score is not None else "",
-            _rating_text(item.get("public_signal")),
+            f"{ui_text(ui_text_map, 'score')} {_score_text(item.get('score'))}",
+            f"{ui_text(ui_text_map, 'base')} {_score_text(base_score)}" if base_score is not None else "",
+            _rating_text(item.get("public_signal"), ui_text_map),
         ]
         return " - ".join(part for part in parts if part)
 
@@ -966,14 +1046,14 @@ def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
     )
 
 
-def render_chat_history(history: list[dict[str, Any]] | None) -> html.Div:
+def render_chat_history(history: list[dict[str, Any]] | None, ui_text_map: dict[str, str] | None = None) -> html.Div:
     history = history or []
     if not history:
         return html.Div(
             className="chat-empty",
             children=[
-                html.Strong("Shortlist copilot"),
-                html.Span("Save hospitals, then ask about tradeoffs, gaps, contact checks, or what to verify next."),
+                html.Strong(ui_text(ui_text_map, "chat_empty_title")),
+                html.Span(ui_text(ui_text_map, "chat_empty_body")),
             ],
         )
 
@@ -986,8 +1066,8 @@ def render_chat_history(history: list[dict[str, Any]] | None) -> html.Div:
                     html.Div(
                         className="chat-meta",
                         children=[
-                            html.Span("You" if message.get("role") == "user" else "Copilot"),
-                            chip("web checked", "chip chip-ok") if message.get("used_search") else None,
+                            html.Span(ui_text(ui_text_map, "you") if message.get("role") == "user" else ui_text(ui_text_map, "copilot")),
+                            chip(ui_text(ui_text_map, "web_checked"), "chip chip-ok") if message.get("used_search") else None,
                         ],
                     ),
                     dcc.Markdown(message.get("content") or "", className="chat-markdown", link_target="_blank"),
@@ -1004,6 +1084,10 @@ app.layout = html.Div(
     className="app-shell",
     children=[
         dcc.Store(id="candidate-store", data=[]),
+        dcc.Store(id="raw-candidate-store", data=[]),
+        dcc.Store(id="parsed-store", data={}),
+        dcc.Store(id="location-store", data={}),
+        dcc.Store(id="data-notes-store", data=[]),
         dcc.Store(id="result-ui-text-store", data=DEFAULT_RESULT_UI_TEXT),
         dcc.Store(id="shortlist-store", data=[]),
         dcc.Store(id="geolocation-store", data=None),
@@ -1016,10 +1100,24 @@ app.layout = html.Div(
         html.Header(
             className="app-header",
             children=[
-                html.Div([html.H1(APP_TITLE), html.P("Evidence-attached care facility shortlists.")]),
+                html.Div([html.H1(APP_TITLE, id="app-title"), html.P("Evidence-attached care facility shortlists.", id="app-subtitle")]),
                 html.Div(
                     className="header-actions",
                     children=[
+                        html.Div(
+                            className="header-language-control",
+                            children=[
+                                html.Label("Language", id="global-language-label", htmlFor="language-select"),
+                                dcc.Dropdown(
+                                    id="language-select",
+                                    value="English",
+                                    options=LANGUAGE_OPTIONS,
+                                    clearable=False,
+                                    searchable=False,
+                                    className="select-input header-language-select",
+                                ),
+                            ],
+                        ),
                         html.Button("Dark", id="theme-toggle", className="theme-toggle", n_clicks=0),
                         html.Div(className="status-pill", children=os.getenv("DATABRICKS_SCHEMA", "local data")),
                     ],
@@ -1037,8 +1135,8 @@ app.layout = html.Div(
                         html.Div(
                             className="panel-heading",
                             children=[
-                                html.H2("Find a facility"),
-                                html.P("Choose a search mode, describe what you need, then hit Search."),
+                                html.H2("Find a facility", id="find-facility-title"),
+                                html.P("Choose a search mode, describe what you need, then hit Search.", id="find-facility-help"),
                             ],
                         ),
                         # Mode tab strip
@@ -1046,19 +1144,19 @@ app.layout = html.Div(
                             className="mode-tabs",
                             children=[
                                 html.Button(
-                                    [html.Span("Free text")],
+                                    [html.Span("Free text", id="mode-freetext-label")],
                                     id="mode-tab-freetext",
                                     className="mode-tab mode-tab--active",
                                     n_clicks=0,
                                 ),
                                 html.Button(
-                                    [html.Span("Pin code")],
+                                    [html.Span("Pin code", id="mode-pincode-label")],
                                     id="mode-tab-pincode",
                                     className="mode-tab",
                                     n_clicks=0,
                                 ),
                                 html.Button(
-                                    [html.Span("My location")],
+                                    [html.Span("My location", id="mode-location-label")],
                                     id="mode-tab-location",
                                     className="mode-tab",
                                     n_clicks=0,
@@ -1074,10 +1172,12 @@ app.layout = html.Div(
                                     "Care need + location",
                                     htmlFor="query-input",
                                     className="input-label",
+                                    id="query-label",
                                 ),
                                 html.P(
                                     'e.g. "dialysis near Jaipur" or "emergency surgery near 380007"',
                                     className="input-hint",
+                                    id="query-hint",
                                 ),
                                 dcc.Input(
                                     id="query-input",
@@ -1098,6 +1198,7 @@ app.layout = html.Div(
                                     "Care need",
                                     htmlFor="care-need-pincode",
                                     className="input-label",
+                                    id="care-need-pincode-label",
                                 ),
                                 dcc.Input(
                                     id="care-need-pincode",
@@ -1111,8 +1212,9 @@ app.layout = html.Div(
                                     htmlFor="pincode-input",
                                     className="input-label",
                                     style={"marginTop": "14px"},
+                                    id="pincode-label",
                                 ),
-                                html.P("Your 6-digit postal pin code", className="input-hint"),
+                                html.P("Your 6-digit postal pin code", className="input-hint", id="pincode-hint"),
                                 dcc.Input(
                                     id="pincode-input",
                                     type="text",
@@ -1132,6 +1234,7 @@ app.layout = html.Div(
                                     "Care need",
                                     htmlFor="care-need-location",
                                     className="input-label",
+                                    id="care-need-location-label",
                                 ),
                                 dcc.Input(
                                     id="care-need-location",
@@ -1173,7 +1276,7 @@ app.layout = html.Div(
                             className="controls-row",
                             children=[
                                 html.Div([
-                                    html.Label("Search radius km", htmlFor="radius-input"),
+                                    html.Label("Search radius km", htmlFor="radius-input", id="radius-label"),
                                     dcc.Dropdown(
                                         id="radius-input",
                                         value=250,
@@ -1191,7 +1294,7 @@ app.layout = html.Div(
                                     ),
                                 ]),
                                 html.Div([
-                                    html.Label("Max results", htmlFor="limit-input"),
+                                    html.Label("Max results", htmlFor="limit-input", id="limit-label"),
                                     dcc.Dropdown(
                                         id="limit-input",
                                         value=8,
@@ -1208,20 +1311,6 @@ app.layout = html.Div(
                                         className="select-input",
                                     ),
                                 ]),
-                            ],
-                        ),
-                        html.Div(
-                            className="language-control",
-                            children=[
-                                html.Label("Result language", htmlFor="language-select"),
-                                dcc.Dropdown(
-                                    id="language-select",
-                                    value="English",
-                                    options=LANGUAGE_OPTIONS,
-                                    clearable=False,
-                                    searchable=False,
-                                    className="select-input",
-                                ),
                             ],
                         ),
                         html.Button("Search", id="search-button", className="primary-button"),
@@ -1249,7 +1338,7 @@ app.layout = html.Div(
                         html.Div(
                             className="shortlist-header",
                             children=[
-                                html.H2("Shortlist"),
+                                html.H2("Shortlist", id="shortlist-title"),
                                 html.Button("Clear", id="clear-shortlist", className="ghost-button"),
                             ],
                         ),
@@ -1261,8 +1350,8 @@ app.layout = html.Div(
                                 html.Div(
                                     className="chat-heading",
                                     children=[
-                                        html.H2("Ask Copilot"),
-                                        html.P("Saved facilities become context. Web search runs when current details matter."),
+                                        html.H2("Ask Copilot", id="chat-title"),
+                                        html.P("Saved facilities become context. Web search runs when current details matter.", id="chat-help"),
                                     ],
                                 ),
                                 html.Div(
@@ -1321,6 +1410,7 @@ app.layout = html.Div(
         ),
         html.Footer(
             className="app-footer",
+            id="app-footer",
             children="Referral support only. Verify availability, clinical fit, insurance, and emergency status before sending a patient.",
         ),
     ],
@@ -1351,13 +1441,127 @@ app.clientside_callback(
     Output("theme-toggle", "children"),
     Input("theme-toggle", "n_clicks"),
     State("theme-store", "data"),
+    State("result-ui-text-store", "data"),
 )
-def toggle_theme(n_clicks: int | None, current_theme: str | None):
+def toggle_theme(n_clicks: int | None, current_theme: str | None, ui_text_map: dict[str, str] | None):
     if not n_clicks:
         theme = current_theme or "light"
     else:
         theme = "dark" if (current_theme or "light") == "light" else "light"
-    return theme, f"app-shell theme-{theme}", "Light" if theme == "dark" else "Dark"
+    return theme, f"app-shell theme-{theme}", ui_text(ui_text_map, "light") if theme == "dark" else ui_text(ui_text_map, "dark")
+
+
+@app.callback(
+    Output("result-ui-text-store", "data", allow_duplicate=True),
+    Output("app-title", "children"),
+    Output("app-subtitle", "children"),
+    Output("global-language-label", "children"),
+    Output("theme-toggle", "children", allow_duplicate=True),
+    Output("find-facility-title", "children"),
+    Output("find-facility-help", "children"),
+    Output("mode-freetext-label", "children"),
+    Output("mode-pincode-label", "children"),
+    Output("mode-location-label", "children"),
+    Output("query-label", "children"),
+    Output("query-hint", "children"),
+    Output("query-input", "placeholder"),
+    Output("care-need-pincode-label", "children"),
+    Output("care-need-pincode", "placeholder"),
+    Output("pincode-label", "children"),
+    Output("pincode-hint", "children"),
+    Output("care-need-location-label", "children"),
+    Output("care-need-location", "placeholder"),
+    Output("locate-button", "children"),
+    Output("locate-button", "title"),
+    Output("apply-suggestion-btn", "children"),
+    Output("radius-label", "children"),
+    Output("limit-label", "children"),
+    Output("search-button", "children"),
+    Output("shortlist-title", "children"),
+    Output("clear-shortlist", "children"),
+    Output("download-shortlist", "children"),
+    Output("chat-title", "children"),
+    Output("chat-help", "children"),
+    Output({"type": "chat-preset", "index": ALL}, "children"),
+    Output("chat-history", "children", allow_duplicate=True),
+    Output("chat-input", "placeholder"),
+    Output("chat-submit", "children"),
+    Output("shortlist-panel-body", "children", allow_duplicate=True),
+    Output("results-panel", "children", allow_duplicate=True),
+    Output("candidate-store", "data", allow_duplicate=True),
+    Output("search-status", "children", allow_duplicate=True),
+    Output("app-footer", "children"),
+    Input("language-select", "value"),
+    State("theme-store", "data"),
+    State("shortlist-store", "data"),
+    State("chat-history-store", "data"),
+    State("candidate-store", "data"),
+    State("raw-candidate-store", "data"),
+    State("parsed-store", "data"),
+    State("location-store", "data"),
+    State("data-notes-store", "data"),
+    prevent_initial_call=True,
+)
+def update_app_language(language, current_theme, shortlist, history, candidates, raw_candidates, parsed, location, data_notes):
+    translated_ui, _note = translate_ui_text(DEFAULT_RESULT_UI_TEXT, language or "English")
+    preset_labels = [
+        ui_text(translated_ui, item.get("label_key", ""))
+        for item in CHAT_PROMPTS
+    ]
+    display_candidates = candidates or []
+    results_panel = render_empty_state(translated_ui)
+    if raw_candidates and parsed and location:
+        display_candidates = raw_candidates
+        display_parsed = parsed
+        if (language or "English").strip().lower() != "english":
+            display_candidates, display_parsed, translated_ui, _translation_note = translate_referral_results(
+                raw_candidates,
+                parsed,
+                language or "English",
+                translated_ui,
+            )
+        results_panel = render_results(display_parsed, location, display_candidates, data_notes or [], translated_ui)
+    return (
+        translated_ui,
+        ui_text(translated_ui, "app_title"),
+        ui_text(translated_ui, "app_subtitle"),
+        ui_text(translated_ui, "language"),
+        ui_text(translated_ui, "light") if (current_theme or "light") == "dark" else ui_text(translated_ui, "dark"),
+        ui_text(translated_ui, "find_facility"),
+        ui_text(translated_ui, "find_facility_help"),
+        ui_text(translated_ui, "mode_freetext"),
+        ui_text(translated_ui, "mode_pincode"),
+        ui_text(translated_ui, "mode_location"),
+        ui_text(translated_ui, "care_need_location"),
+        ui_text(translated_ui, "query_hint"),
+        ui_text(translated_ui, "query_placeholder"),
+        ui_text(translated_ui, "care_need_label"),
+        ui_text(translated_ui, "care_need_placeholder"),
+        ui_text(translated_ui, "pin_code"),
+        ui_text(translated_ui, "pin_hint"),
+        ui_text(translated_ui, "care_need_label"),
+        ui_text(translated_ui, "care_need_placeholder"),
+        ui_text(translated_ui, "use_my_location"),
+        ui_text(translated_ui, "use_location_title"),
+        ui_text(translated_ui, "use_this"),
+        ui_text(translated_ui, "search_radius_km"),
+        ui_text(translated_ui, "max_results"),
+        ui_text(translated_ui, "global_search"),
+        ui_text(translated_ui, "shortlist"),
+        ui_text(translated_ui, "clear"),
+        ui_text(translated_ui, "download_csv"),
+        ui_text(translated_ui, "ask_copilot"),
+        ui_text(translated_ui, "chat_help"),
+        preset_labels,
+        render_chat_history(history, translated_ui),
+        ui_text(translated_ui, "chat_placeholder"),
+        ui_text(translated_ui, "ask_copilot_button"),
+        render_shortlist(shortlist, translated_ui),
+        results_panel,
+        display_candidates,
+        ui_text(translated_ui, "click_search_language") if raw_candidates else "",
+        ui_text(translated_ui, "footer"),
+    )
 
 
 app.clientside_callback(
@@ -1498,6 +1702,10 @@ app.clientside_callback(
 @app.callback(
     Output("results-panel", "children"),
     Output("candidate-store", "data"),
+    Output("raw-candidate-store", "data"),
+    Output("parsed-store", "data"),
+    Output("location-store", "data"),
+    Output("data-notes-store", "data"),
     Output("result-ui-text-store", "data"),
     Output("search-status", "children"),
     Input("search-button", "n_clicks"),
@@ -1508,8 +1716,9 @@ app.clientside_callback(
     State("care-need-location", "value"),
     State("radius-input", "value"),
     State("limit-input", "value"),
-    State("language-select", "value"),
     State("geolocation-store", "data"),
+    State("result-ui-text-store", "data"),
+    State("language-select", "value"),
     prevent_initial_call=True,
 )
 def run_search(
@@ -1521,14 +1730,17 @@ def run_search(
     care_need_loc: str,
     radius_km: int,
     limit: int,
-    display_language: str,
     geolocation_data: dict | None,
+    current_ui_text: dict[str, str] | None,
+    display_language: str,
 ):
     mode = mode or "freetext"
 
     try:
         datasets, data_notes = load_datasets()
-        result_ui_text = DEFAULT_RESULT_UI_TEXT.copy()
+        result_ui_text = dict(current_ui_text or DEFAULT_RESULT_UI_TEXT)
+        if (display_language or "English").strip().lower() != "english" and result_ui_text.get("global_search") == DEFAULT_RESULT_UI_TEXT["global_search"]:
+            result_ui_text, _ = translate_ui_text(DEFAULT_RESULT_UI_TEXT, display_language or "English")
         correction_note = ""
         try:
             radius_value = float(radius_km if radius_km not in (None, "") else 250)
@@ -1546,7 +1758,7 @@ def run_search(
         if mode == "freetext":
             raw_query = (query or "").strip()
             if not raw_query:
-                return render_empty_state(), [], result_ui_text, "Enter a care need and location."
+                return render_empty_state(result_ui_text), [], [], {}, {}, [], result_ui_text, ui_text(result_ui_text, "enter_need_location")
 
             location_hint = _extract_location_hint(raw_query)
             if location_hint and len(location_hint) >= 3:
@@ -1580,7 +1792,7 @@ def run_search(
             care_need = (care_need_pin or "").strip()
             pin = re.sub(r"\D", "", (pincode or ""))
             if not care_need:
-                return render_empty_state(), [], result_ui_text, "Enter a care need."
+                return render_empty_state(result_ui_text), [], [], {}, {}, [], result_ui_text, ui_text(result_ui_text, "enter_care_need")
             if len(pin) != 6:
                 return (
                     html.Div(
@@ -1591,6 +1803,10 @@ def run_search(
                         ],
                     ),
                     [],
+                    [],
+                    {},
+                    {},
+                    [],
                     result_ui_text,
                     "Enter a 6-digit pin code.",
                 )
@@ -1600,7 +1816,7 @@ def run_search(
         elif mode == "location":
             care_need = (care_need_loc or "").strip()
             if not care_need:
-                return render_empty_state(), [], result_ui_text, "Enter a care need."
+                return render_empty_state(result_ui_text), [], [], {}, {}, [], result_ui_text, ui_text(result_ui_text, "enter_care_need")
             gps = geolocation_data or {}
             if not gps.get("latitude") or gps.get("error"):
                 return (
@@ -1611,6 +1827,10 @@ def run_search(
                             html.P("Click 'Use My Location' and allow the browser to access your GPS."),
                         ],
                     ),
+                    [],
+                    [],
+                    {},
+                    {},
                     [],
                     result_ui_text,
                     "Tap 'Use My Location' first.",
@@ -1628,7 +1848,7 @@ def run_search(
             }
 
         else:
-            return render_empty_state(), [], result_ui_text, "Unknown search mode."
+            return render_empty_state(result_ui_text), [], [], {}, {}, [], result_ui_text, "Unknown search mode."
 
         # Guard: location must resolve.
         if not location.get("latitude") or not location.get("longitude"):
@@ -1642,6 +1862,10 @@ def run_search(
                         ),
                     ],
                 ),
+                [],
+                [],
+                {},
+                {},
                 [],
                 result_ui_text,
                 "Location could not be resolved from the current datasets.",
@@ -1663,23 +1887,35 @@ def run_search(
             if public_note and re.search(r"\b(skipped|unavailable|rate-limited|returned no)\b", public_note, re.IGNORECASE):
                 data_notes = data_notes + [f"Public review signal: {public_note}"]
 
+        candidates = prepare_candidates_for_display(candidates)
+        raw_candidates = candidates
         parsed_dict = parsed.to_dict()
+        raw_parsed_dict = parsed_dict
+        raw_location = location
+        raw_data_notes = data_notes
         translation_note = None
         if candidates and (display_language or "English").strip().lower() != "english":
             candidates, parsed_dict, result_ui_text, translation_note = translate_referral_results(
                 candidates,
                 parsed_dict,
                 display_language or "English",
-                DEFAULT_RESULT_UI_TEXT,
+                result_ui_text,
             )
 
         return (
             render_results(parsed_dict, location, candidates, data_notes, result_ui_text),
             candidates,
+            raw_candidates,
+            raw_parsed_dict,
+            raw_location,
+            raw_data_notes,
             result_ui_text,
-            (
-                f"Found {len(candidates)} candidates within {radius_value:g} km "
-                f"(showing up to {limit_value}) using {parsed.source} parsing. {correction_note}"
+            ui_text(result_ui_text, "found_status").format(
+                count=len(candidates),
+                radius=f"{radius_value:g}",
+                limit=limit_value,
+                source=parsed.source,
+                note=correction_note,
             ).strip(),
         )
 
@@ -1689,6 +1925,10 @@ def run_search(
                 className="empty-state error-state",
                 children=[html.H2("Search failed"), html.P(str(exc))],
             ),
+            [],
+            [],
+            {},
+            {},
             [],
             DEFAULT_RESULT_UI_TEXT,
             "Search failed.",
@@ -1727,13 +1967,14 @@ def update_map_selection(click_data, marker_clicks, candidates, result_ui_text):
     Input("clear-shortlist", "n_clicks"),
     State("candidate-store", "data"),
     State("shortlist-store", "data"),
+    State("result-ui-text-store", "data"),
     prevent_initial_call=True,
 )
-def update_shortlist(save_clicks, clear_clicks, candidates, shortlist):
+def update_shortlist(save_clicks, clear_clicks, candidates, shortlist, result_ui_text):
     triggered = ctx.triggered_id
 
     if triggered == "clear-shortlist":
-        return [], render_shortlist([])
+        return [], render_shortlist([], result_ui_text)
 
     if not isinstance(triggered, dict) or triggered.get("type") != "save-candidate":
         return no_update, no_update
@@ -1748,21 +1989,25 @@ def update_shortlist(save_clicks, clear_clicks, candidates, shortlist):
     if not any(item.get("candidate_id") == candidate_id for item in shortlist):
         shortlist = shortlist + [candidate]
 
-    return shortlist, render_shortlist(shortlist)
+    return shortlist, render_shortlist(shortlist, result_ui_text)
 
 
 @app.callback(
     Output("chat-input", "value", allow_duplicate=True),
     Input({"type": "chat-preset", "index": ALL}, "n_clicks"),
     State("chat-input", "value"),
+    State("result-ui-text-store", "data"),
     prevent_initial_call=True,
 )
-def apply_chat_preset(preset_clicks, current_value):
+def apply_chat_preset(preset_clicks, current_value, result_ui_text):
     triggered = ctx.triggered_id
     if not isinstance(triggered, dict) or triggered.get("type") != "chat-preset":
         return no_update
 
-    prompt_by_id = {item["id"]: item["prompt"] for item in CHAT_PROMPTS}
+    prompt_by_id = {
+        item["id"]: ui_text(result_ui_text, item.get("prompt_key", "")) or item["prompt"]
+        for item in CHAT_PROMPTS
+    }
     return prompt_by_id.get(triggered.get("index"), current_value or "")
 
 
@@ -1775,18 +2020,20 @@ def apply_chat_preset(preset_clicks, current_value):
     State("chat-input", "value"),
     State("shortlist-store", "data"),
     State("chat-history-store", "data"),
+    State("language-select", "value"),
+    State("result-ui-text-store", "data"),
     prevent_initial_call=True,
 )
-def ask_copilot(n_clicks, question, shortlist, history):
+def ask_copilot(n_clicks, question, shortlist, history, language, result_ui_text):
     question = (question or "").strip()
     history = history or []
     shortlist = shortlist or []
 
     if not question:
-        return no_update, no_update, no_update, "Ask a question about the saved shortlist."
+        return no_update, no_update, no_update, ui_text(result_ui_text, "chat_placeholder")
 
     user_message = {"role": "user", "content": question}
-    result = ask_shortlist_copilot(question, shortlist)
+    result = ask_shortlist_copilot(question, shortlist, language=language or "English")
     answer = result.get("answer") or "I could not produce an answer."
     assistant_message = {
         "role": "assistant",
@@ -1794,11 +2041,11 @@ def ask_copilot(n_clicks, question, shortlist, history):
         "used_search": bool(result.get("used_search")),
     }
     new_history = (history + [user_message, assistant_message])[-10:]
-    status = "Answered with web search." if result.get("used_search") else "Answered from shortlist evidence."
+    status = ui_text(result_ui_text, "answered_web") if result.get("used_search") else ui_text(result_ui_text, "answered_evidence")
     if result.get("error") and result.get("error") not in {"missing_api_key", "missing_openai_sdk"}:
-        status = "Answered without web search fallback."
+        status = ui_text(result_ui_text, "answered_fallback")
 
-    return new_history, render_chat_history(new_history), "", status
+    return new_history, render_chat_history(new_history, result_ui_text), "", status
 
 
 @app.callback(
