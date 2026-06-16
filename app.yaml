@@ -24,6 +24,8 @@ env:
     value: "gpt-4o"
   - name: OPENAI_SEARCH_MODEL
     value: "gpt-4o"
+  - name: OPENAI_TIMEOUT_SECONDS
+    value: "8"
   - name: ENABLE_WEB_RESOLUTION
     value: "true"
   - name: ENABLE_TILE_MAP
