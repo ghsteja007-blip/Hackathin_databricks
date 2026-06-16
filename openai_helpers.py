@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -10,6 +12,10 @@ from typing import Any
 DEFAULT_OPENAI_MODEL = "gpt-4o"
 DEFAULT_SPELL_MODEL = "gpt-4o-mini"
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 8.0
+DEFAULT_PUBLIC_SIGNAL_CACHE_SECONDS = 6 * 60 * 60
+
+
+_PUBLIC_SIGNAL_CACHE: dict[str, tuple[float, dict[str, dict[str, Any]], str | None]] = {}
 
 
 def _model_for(env_name: str, fallback: str = DEFAULT_OPENAI_MODEL) -> str:
@@ -27,6 +33,106 @@ def _openai_client(api_key: str):
     from openai import OpenAI
 
     return OpenAI(api_key=api_key, timeout=_openai_timeout_seconds(), max_retries=0)
+
+
+def _looks_like_rate_limit_error(exc: Exception) -> bool:
+    text = str(exc)
+    lowered = text.lower()
+    return "429" in lowered or "rate_limit" in lowered or "rate limit" in lowered
+
+
+def _rate_limit_retry_delay_seconds(exc: Exception) -> float | None:
+    if not _looks_like_rate_limit_error(exc):
+        return None
+
+    text = str(exc)
+    try:
+        max_wait = float(os.getenv("OPENAI_RATE_LIMIT_RETRY_SECONDS", "22"))
+    except ValueError:
+        max_wait = 22.0
+    if max_wait <= 0:
+        return None
+
+    match = re.search(r"try again in\s+(\d+(?:\.\d+)?)s", text, flags=re.IGNORECASE)
+    requested_wait = float(match.group(1)) + 1.0 if match else 20.0
+    return min(max_wait, requested_wait)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    return _looks_like_rate_limit_error(exc)
+
+
+def _friendly_openai_unavailable_message(exc: Exception, feature: str) -> str:
+    if _is_rate_limit_error(exc):
+        return f"{feature} is temporarily rate-limited by OpenAI; showing the dataset evidence for now. Try Search again in about 20 seconds."
+    return f"{feature} is unavailable right now; showing the dataset evidence for now."
+
+
+def _responses_create_with_retry(client: Any, **kwargs: Any) -> Any:
+    try:
+        return client.responses.create(**kwargs)
+    except Exception as exc:
+        delay = _rate_limit_retry_delay_seconds(exc)
+        if delay is None:
+            raise
+        time.sleep(delay)
+        return client.responses.create(**kwargs)
+
+
+def _public_signal_cache_ttl_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("PUBLIC_REVIEW_CACHE_TTL_SECONDS", DEFAULT_PUBLIC_SIGNAL_CACHE_SECONDS)))
+    except ValueError:
+        return float(DEFAULT_PUBLIC_SIGNAL_CACHE_SECONDS)
+
+
+def _public_signal_cache_key(care_need: str, location_label: str, facilities: list[dict[str, Any]]) -> str:
+    fingerprint = {
+        "care_need": re.sub(r"\s+", " ", (care_need or "").strip().lower()),
+        "location": re.sub(r"\s+", " ", (location_label or "").strip().lower()),
+        "facilities": [
+            {
+                "candidate_id": item.get("candidate_id"),
+                "name": item.get("name"),
+                "city_state": item.get("city_state"),
+            }
+            for item in facilities
+        ],
+    }
+    payload = json.dumps(fingerprint, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _get_cached_public_signals(cache_key: str) -> tuple[dict[str, dict[str, Any]], str | None] | None:
+    ttl = _public_signal_cache_ttl_seconds()
+    if ttl <= 0:
+        return None
+
+    cached = _PUBLIC_SIGNAL_CACHE.get(cache_key)
+    if not cached:
+        return None
+
+    cached_at, signals, note = cached
+    if (time.time() - cached_at) > ttl:
+        _PUBLIC_SIGNAL_CACHE.pop(cache_key, None)
+        return None
+    return signals, note
+
+
+def _set_cached_public_signals(cache_key: str, signals: dict[str, dict[str, Any]], note: str | None) -> None:
+    ttl = _public_signal_cache_ttl_seconds()
+    if ttl <= 0:
+        return
+
+    try:
+        max_entries = max(4, int(os.getenv("PUBLIC_REVIEW_CACHE_MAX_ENTRIES", "64")))
+    except ValueError:
+        max_entries = 64
+
+    _PUBLIC_SIGNAL_CACHE[cache_key] = (time.time(), signals, note)
+    while len(_PUBLIC_SIGNAL_CACHE) > max_entries:
+        oldest_key = min(_PUBLIC_SIGNAL_CACHE, key=lambda key: _PUBLIC_SIGNAL_CACHE[key][0])
+        _PUBLIC_SIGNAL_CACHE.pop(oldest_key, None)
 
 
 NEED_SYNONYMS = {
@@ -149,7 +255,8 @@ def _parse_with_openai(raw_query: str, fallback: ParsedReferralQuery) -> ParsedR
         "Do not invent facility names."
     )
 
-    response = client.responses.create(
+    response = _responses_create_with_retry(
+        client,
         model=_model_for("OPENAI_PARSE_MODEL"),
         input=[
             {"role": "developer", "content": system_prompt},
@@ -196,20 +303,24 @@ def web_resolve_india_location(location: str) -> dict[str, Any] | None:
         f"Place: {location}"
     )
 
-    response = client.responses.create(
-        model=_model_for("OPENAI_SEARCH_MODEL"),
-        tools=[{"type": "web_search", "search_context_size": "low"}],
-        input=[
-            {
-                "role": "developer",
-                "content": (
-                    "You are a careful India geography resolver. Prefer official or encyclopedic sources. "
-                    "Do not return coordinates unless they are plausible for India."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-    )
+    try:
+        response = _responses_create_with_retry(
+            client,
+            model=_model_for("OPENAI_SEARCH_MODEL"),
+            tools=[{"type": "web_search", "search_context_size": "low"}],
+            input=[
+                {
+                    "role": "developer",
+                    "content": (
+                        "You are a careful India geography resolver. Prefer official or encyclopedic sources. "
+                        "Do not return coordinates unless they are plausible for India."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+    except Exception:
+        return None
 
     try:
         payload = _extract_json(getattr(response, "output_text", "") or "")
@@ -292,8 +403,8 @@ def parse_referral_query(raw_query: str) -> ParsedReferralQuery:
     try:
         parsed = _parse_with_openai(raw_query, fallback)
         return parsed or fallback
-    except Exception as exc:
-        fallback.notes = f"OpenAI parsing failed; used fallback parsing. {exc}"
+    except Exception:
+        fallback.notes = "OpenAI parsing failed; used fallback parsing."
         return fallback
 
 
@@ -351,7 +462,7 @@ def _dedupe_urls(urls: list[Any]) -> list[str]:
 
 
 def _clean_public_signal(payload: dict[str, Any]) -> dict[str, Any]:
-    rating = payload.get("justdial_rating")
+    rating = payload.get("google_rating")
     try:
         rating = float(rating) if rating not in (None, "") else None
     except (TypeError, ValueError):
@@ -359,7 +470,7 @@ def _clean_public_signal(payload: dict[str, Any]) -> dict[str, Any]:
     if rating is not None and not (0 <= rating <= 5):
         rating = None
 
-    review_count = payload.get("justdial_review_count")
+    review_count = payload.get("google_review_count")
     try:
         review_count = int(float(review_count)) if review_count not in (None, "") else None
     except (TypeError, ValueError):
@@ -379,10 +490,10 @@ def _clean_public_signal(payload: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "candidate_id": str(payload.get("candidate_id") or ""),
-        "justdial_rating": rating,
-        "justdial_review_count": review_count,
-        "rating_source": "Justdial",
-        "justdial_url": str(payload.get("justdial_url") or payload.get("rating_url") or ""),
+        "google_rating": rating,
+        "google_review_count": review_count,
+        "rating_source": str(payload.get("rating_source") or "public web"),
+        "rating_url": str(payload.get("rating_url") or ""),
         "official_website_url": str(payload.get("official_website_url") or ""),
         "review_themes": [str(item).strip() for item in themes[:5] if str(item).strip()][:5],
         "confidence": str(payload.get("confidence") or "unknown").lower(),
@@ -392,15 +503,52 @@ def _clean_public_signal(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_rating_delta(signal: dict[str, Any]) -> float:
-    rating = signal.get("justdial_rating")
-    count = signal.get("justdial_review_count") or 0
+    rating = signal.get("google_rating")
+    count = signal.get("google_review_count") or 0
     if rating is None:
         return 0.0
 
-    # Public reputation is a meaningful 0-10 modifier, but still not a replacement for referral evidence.
+    # Keep public reputation as a small 0-10 modifier, not a replacement for referral evidence.
     confidence = min(1.0, max(0.35, count / 250 if count else 0.45))
-    delta = ((float(rating) - 3.4) / 1.6) * 2.5 * confidence
-    return round(max(-2.0, min(2.5, delta)), 2)
+    delta = (float(rating) - 3.8) * 0.75 * confidence
+    return round(max(-0.6, min(0.9, delta)), 2)
+
+
+def _apply_public_signals(
+    candidates: list[dict[str, Any]],
+    signals: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    enriched = []
+    for candidate in candidates:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        signal = signals.get(candidate_id)
+        if not signal:
+            enriched.append(candidate)
+            continue
+
+        base_score = max(0.0, min(10.0, float(candidate.get("score") or 0)))
+        delta = _public_rating_delta(signal)
+        official_website = signal.get("official_website_url") if _is_http_url(signal.get("official_website_url")) else ""
+        merged_source_urls = _dedupe_urls(
+            [signal.get("rating_url")]
+            + list(candidate.get("source_urls") or [])
+            + [signal.get("official_website_url")]
+            + list(signal.get("source_urls") or [])
+        )
+        enriched.append(
+            {
+                **candidate,
+                "base_score": round(base_score, 1),
+                "public_signal": signal,
+                "public_score_delta": delta,
+                "score": round(max(0.0, min(10.0, base_score + delta)), 1),
+                "website": official_website or candidate.get("website") or "",
+                "source_urls": merged_source_urls,
+            }
+        )
+
+    enriched.sort(key=lambda item: (-float(item.get("score") or 0), item.get("distance_km", 10**9), item.get("name")))
+    return enriched
 
 
 def enrich_candidate_public_signals(
@@ -422,7 +570,7 @@ def enrich_candidate_public_signals(
         return candidates, None
 
     try:
-        limit = max(1, min(25, int(os.getenv("PUBLIC_REVIEW_ENRICHMENT_LIMIT", "25"))))
+        limit = max(1, min(10, int(os.getenv("PUBLIC_REVIEW_ENRICHMENT_LIMIT", "8"))))
     except ValueError:
         limit = 8
 
@@ -430,17 +578,25 @@ def enrich_candidate_public_signals(
     if not facilities:
         return candidates, None
 
+    cache_key = _public_signal_cache_key(care_need, location_label, facilities)
+    cached = _get_cached_public_signals(cache_key)
+    if cached:
+        cached_signals, cached_note = cached
+        return _apply_public_signals(candidates, cached_signals), (
+            cached_note or "Public ratings reused from recent lookup."
+        )
+
     try:
         client = _openai_client(api_key)
     except Exception:
         return candidates, "Public rating lookup skipped: OpenAI SDK unavailable."
 
     system = (
-        "You enrich a healthcare referral shortlist with Justdial reputation signals and official website links. "
-        "Use web search to look up each listed Indian facility. The justdial_rating field must be the overall Justdial rating for that facility, not Google, Practo, Facebook, or inferred sentiment. "
-        "Also find the hospital's own official website URL when one is confidently available; do not use Justdial, Practo, Facebook, Instagram, or directory pages as official_website_url. "
-        "If the Justdial listing cannot be confidently matched, set justdial_rating and justdial_review_count to null and confidence to not_found. "
-        "Return only compact JSON. Do not include medical advice. Do not quote long reviews; summarize review themes in your own words."
+        "You enrich a healthcare referral shortlist with public web reputation signals and official website links. "
+        "Use web search to look up each listed Indian facility. Prefer Google Maps / Google Business Profile rating signals when visible in search results; "
+        "if not visible, use another clearly public rating source and mark the source. "
+        "Also find the hospital's own official website URL when one is confidently available; do not use rating directories, social pages, or review pages as official_website_url. "
+        "Return only compact JSON. Do not include medical advice. Do not quote long reviews; summarize themes in your own words."
     )
     prompt = (
         "Care need: "
@@ -454,23 +610,25 @@ def enrich_candidate_public_signals(
         '  "items": [\n'
         "    {\n"
         '      "candidate_id": "same candidate_id",\n'
-        '      "justdial_rating": 4.2,\n'
-        '      "justdial_review_count": 123,\n'
-        '      "justdial_url": "Justdial listing URL if available",\n'
+        '      "google_rating": 4.2,\n'
+        '      "google_review_count": 123,\n'
+        '      "rating_source": "Google Maps or another public source",\n'
+        '      "rating_url": "best public URL if available",\n'
         '      "official_website_url": "hospital official website URL if available",\n'
         '      "review_themes": ["short paraphrased theme", "short paraphrased theme"],\n'
         '      "confidence": "high|medium|low|not_found",\n'
-        '      "source_urls": ["supporting URL such as Justdial or official site"],\n'
+        '      "source_urls": ["supporting URL"],\n'
         '      "notes": "short uncertainty note"\n'
         "    }\n"
         "  ],\n"
         '  "note": "overall lookup note"\n'
         "}\n"
-        "If a facility cannot be confidently matched to a Justdial listing, set confidence to not_found and leave Justdial rating fields null. Do not substitute Google, Practo, Facebook, hospital website, or other ratings into justdial_rating."
+        "If a facility cannot be confidently matched, set confidence to not_found and leave rating fields null."
     )
 
     try:
-        response = client.responses.create(
+        response = _responses_create_with_retry(
+            client,
             model=_model_for("OPENAI_REVIEW_MODEL", _model_for("OPENAI_SEARCH_MODEL")),
             tools=[{"type": "web_search", "search_context_size": "low"}],
             tool_choice="auto",
@@ -481,7 +639,7 @@ def enrich_candidate_public_signals(
         )
         payload = _extract_json(getattr(response, "output_text", "") or "")
     except Exception as exc:
-        return candidates, f"Public rating lookup skipped: {exc}"
+        return candidates, _friendly_openai_unavailable_message(exc, "Public rating lookup")
 
     items = payload.get("items") or []
     if not isinstance(items, list):
@@ -493,36 +651,9 @@ def enrich_candidate_public_signals(
         if signal.get("candidate_id")
     }
 
-    enriched = []
-    for candidate in candidates:
-        candidate_id = str(candidate.get("candidate_id") or "")
-        signal = signals.get(candidate_id)
-        if not signal:
-            enriched.append(candidate)
-            continue
-        base_score = max(0.0, min(10.0, float(candidate.get("score") or 0)))
-        delta = _public_rating_delta(signal)
-        official_website = signal.get("official_website_url") if _is_http_url(signal.get("official_website_url")) else ""
-        merged_source_urls = _dedupe_urls(
-            [signal.get("justdial_url")]
-            + list(candidate.get("source_urls") or [])
-            + [signal.get("official_website_url")]
-            + list(signal.get("source_urls") or [])
-        )
-        updated = {
-            **candidate,
-            "base_score": round(base_score, 1),
-            "public_signal": signal,
-            "public_score_delta": delta,
-            "score": round(max(0.0, min(10.0, base_score + delta)), 1),
-            "website": official_website or candidate.get("website") or "",
-            "source_urls": merged_source_urls,
-        }
-        enriched.append(updated)
-
-    enriched.sort(key=lambda item: (-float(item.get("score") or 0), item.get("distance_km", 10**9), item.get("name")))
-    note = payload.get("note") or "Justdial ratings and official website links checked with one LLM web-search call."
-    return enriched, str(note)
+    note = payload.get("note") or "Public ratings and official website links checked with one LLM web-search call."
+    _set_cached_public_signals(cache_key, signals, str(note))
+    return _apply_public_signals(candidates, signals), str(note)
 
 
 def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]]) -> dict[str, Any]:
@@ -573,7 +704,8 @@ def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]]) -> dic
     model = _model_for("OPENAI_CHAT_MODEL")
 
     try:
-        response = client.responses.create(
+        response = _responses_create_with_retry(
+            client,
             model=model,
             tools=[{"type": "web_search", "search_context_size": "low"}],
             tool_choice="auto",
@@ -590,7 +722,8 @@ def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]]) -> dic
         }
     except Exception as exc:
         try:
-            response = client.responses.create(
+            response = _responses_create_with_retry(
+                client,
                 model=model,
                 input=[
                     {"role": "developer", "content": system},
@@ -604,8 +737,13 @@ def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]]) -> dic
                 "error": str(exc),
             }
         except Exception as fallback_exc:
+            message = (
+                "Copilot is temporarily rate-limited by OpenAI. Please try again in about 20 seconds."
+                if _is_rate_limit_error(fallback_exc)
+                else "Copilot could not reach OpenAI right now. Please try again shortly."
+            )
             return {
-                "answer": f"OpenAI chat failed: {fallback_exc}",
+                "answer": message,
                 "used_search": False,
                 "error": str(fallback_exc),
             }

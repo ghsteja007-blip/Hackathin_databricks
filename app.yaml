@@ -18,6 +18,8 @@ env:
     valueFrom: secret
   - name: OPENAI_MODEL
     value: "gpt-4o"
+  - name: OPENAI_PARSE_MODEL
+    value: "gpt-4o-mini"
   - name: OPENAI_SPELL_MODEL
     value: "gpt-4o-mini"
   - name: OPENAI_CHAT_MODEL
@@ -33,7 +35,13 @@ env:
   - name: ENABLE_PUBLIC_REVIEW_ENRICHMENT
     value: "true"
   - name: PUBLIC_REVIEW_ENRICHMENT_LIMIT
-    value: "25"
+    value: "8"
+  - name: PUBLIC_REVIEW_CACHE_TTL_SECONDS
+    value: "21600"
+  - name: PUBLIC_REVIEW_CACHE_MAX_ENTRIES
+    value: "64"
+  - name: OPENAI_RATE_LIMIT_RETRY_SECONDS
+    value: "22"
   - name: ENABLE_LEAFLET_MAP
     value: "true"
   - name: LEAFLET_TILE_URL

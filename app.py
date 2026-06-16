@@ -115,12 +115,13 @@ def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
 def _rating_text(signal: dict[str, Any] | None) -> str:
     if not signal:
         return ""
-    rating = signal.get("justdial_rating")
-    count = signal.get("justdial_review_count")
+    rating = signal.get("google_rating")
+    count = signal.get("google_review_count")
     if rating is None:
         return ""
     count_text = f" ({int(count):,} reviews)" if count else ""
-    return f"Justdial: {float(rating):.1f}/5{count_text}"
+    source = signal.get("rating_source") or "public rating"
+    return f"{source}: {float(rating):.1f}/5{count_text}"
 
 
 def _is_http_url(url: Any) -> bool:
@@ -142,23 +143,23 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
         return html.Div(
             className="public-signal public-signal-empty",
             children=[
-                html.Div("Justdial rating", className="section-label"),
+                html.Div("Public review signal", className="section-label"),
                 chip("not checked or unavailable", "chip chip-soft"),
             ],
         )
 
-    rating = signal.get("justdial_rating")
-    count = signal.get("justdial_review_count")
+    rating = signal.get("google_rating")
+    count = signal.get("google_review_count")
     confidence = signal.get("confidence") or "unknown"
     themes = signal.get("review_themes") or []
     delta = candidate.get("public_score_delta")
-    url = signal.get("justdial_url") if _is_http_url(signal.get("justdial_url")) else _first_http_url(signal.get("source_urls"))
+    url = signal.get("rating_url") if _is_http_url(signal.get("rating_url")) else _first_http_url(signal.get("source_urls"))
 
     chips = []
     if rating is not None:
-        chips.append(chip(f"Justdial {float(rating):.1f}/5", "chip chip-ok"))
+        chips.append(chip(f"rating {float(rating):.1f}/5", "chip chip-ok"))
     if count:
-        chips.append(chip(f"{int(count):,} Justdial reviews", "chip chip-soft"))
+        chips.append(chip(f"{int(count):,} public reviews", "chip chip-soft"))
     if delta not in (None, ""):
         sign = "+" if float(delta) >= 0 else ""
         chips.append(chip(f"{sign}{float(delta):.1f}/10 adjustment", "chip chip-soft"))
@@ -167,7 +168,7 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
     return html.Div(
         className="public-signal",
         children=[
-            html.Div("Justdial rating", className="section-label"),
+            html.Div("Public review signal", className="section-label"),
             html.Div(className="public-signal-chips", children=chips),
             html.Div(
                 className="public-themes",
@@ -175,7 +176,7 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
                 or [chip(signal.get("notes") or "No review themes found", "chip chip-warning")],
             ),
             html.A(
-                "Open Justdial source",
+                "Open public source",
                 href=url,
                 target="_blank",
                 rel="noreferrer",
@@ -528,10 +529,10 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
     suspicious = candidate.get("missing_or_suspicious") or []
     evidence = candidate.get("evidence") or []
     signal = candidate.get("public_signal") or {}
-    justdial_url = signal.get("justdial_url") if _is_http_url(signal.get("justdial_url")) else ""
-    source_url = justdial_url or _first_http_url(candidate.get("source_urls") or [])
+    rating_url = signal.get("rating_url") if _is_http_url(signal.get("rating_url")) else ""
+    source_url = rating_url or _first_http_url(candidate.get("source_urls") or [])
     website_url = str(candidate.get("website") or "").strip()
-    source_label = "Justdial source" if justdial_url else "Source"
+    source_label = "Public source" if rating_url else "Source"
     has_public_signal = bool(signal)
     base_score = _safe_float(candidate.get("base_score"))
     contact_bits = []
@@ -1368,7 +1369,7 @@ def run_search(
                 location_label=location.get("label") or parsed.location,
             )
             if public_note:
-                data_notes = data_notes + [f"Justdial rating signal: {public_note}"]
+                data_notes = data_notes + [f"Public review signal: {public_note}"]
 
         parsed_dict = parsed.to_dict()
         return (
@@ -1514,9 +1515,10 @@ def download_shortlist(n_clicks, shortlist):
                 "score": item.get("score"),
                 "base_score": item.get("base_score"),
                 "public_score_delta": item.get("public_score_delta"),
-                "justdial_rating": signal.get("justdial_rating"),
-                "justdial_review_count": signal.get("justdial_review_count"),
-                "justdial_url": signal.get("justdial_url"),
+                "google_rating": signal.get("google_rating"),
+                "google_review_count": signal.get("google_review_count"),
+                "rating_source": signal.get("rating_source"),
+                "rating_url": signal.get("rating_url"),
                 "official_website_url": signal.get("official_website_url"),
                 "public_signal": json.dumps(item.get("public_signal", {}), ensure_ascii=False),
                 "facility_type": item.get("facility_type"),
