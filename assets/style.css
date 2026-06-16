@@ -90,6 +90,7 @@ body {
 
 .app-header {
   position: relative;
+  z-index: 1000;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -98,6 +99,7 @@ body {
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.86);
   backdrop-filter: blur(14px);
+  overflow: visible;
 }
 
 .app-header::before {
@@ -127,6 +129,54 @@ body {
 .app-header p {
   margin: 6px 0 0;
   color: var(--muted);
+}
+
+.header-actions {
+  position: relative;
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.header-language-control {
+  position: relative;
+  z-index: 1100;
+  min-width: 190px;
+}
+
+.header-language-control label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.header-language-select .Select-control {
+  min-width: 190px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.header-language-select,
+.header-language-select .Select,
+.header-language-select .Select-control,
+.header-language-select .Select-menu-outer {
+  position: relative;
+  z-index: 1200;
+}
+
+.header-language-select .Select-menu-outer {
+  position: absolute;
+  z-index: 9999;
+  min-width: 100%;
+}
+
+.theme-dark .header-language-select .Select-control {
+  background: rgba(13, 21, 17, 0.95);
 }
 
 .theme-dark .app-header p {
@@ -328,6 +378,8 @@ label {
 }
 
 .select-input .Select-menu-outer {
+  position: absolute;
+  z-index: 9999;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);
