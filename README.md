@@ -9,7 +9,7 @@ Dash app for evidence-attached referral shortlists from the `databricks_virtue_f
 - Resolves the location from pincode/facility geography.
 - Falls back to OpenAI web search for India location resolution when local sample geography is incomplete and `ENABLE_WEB_RESOLUTION=true`.
 - Ranks nearby facilities using distance plus evidence from facility fields such as `specialties`, `procedure`, `equipment`, `capability`, and `description`.
-- Displays an interactive referral map with numbered facility markers, hover evidence, and click-to-inspect details.
+- Displays an interactive Leaflet referral map with tile basemap, facility popups, route lines, hover evidence, and click-to-inspect details.
 - Includes a light/dark theme toggle.
 - Shows matching evidence, missing or suspicious evidence, and a saveable shortlist.
 - Adds a shortlist chat copilot that can compare saved facilities and use OpenAI web search for fresh external details when needed.
@@ -34,7 +34,7 @@ The app expects these tables by default:
 
 `ENABLE_WEB_RESOLUTION=true` lets the app use OpenAI's Responses API web search tool to resolve city/district coordinates when the sample pincode or facility geography cannot resolve a place. Local data still wins when available.
 
-`ENABLE_TILE_MAP=false` keeps the app on a Plotly India map with a built-in outline, route lines, city labels, and numbered markers. Set it to `true` only if your app environment can render tile maps reliably.
+The referral map uses Dash Leaflet by default for a richer map experience. Set `ENABLE_LEAFLET_MAP=false` to use the earlier Plotly `Scattergeo` fallback if tile access is blocked in your Databricks network.
 
 ## Secret handling
 
@@ -62,6 +62,6 @@ Without `OPENAI_API_KEY`, the app still works with fallback parsing.
 - The current ranking is deterministic and evidence-grounded.
 - OpenAI parses the query, autocorrects obvious location typos, resolves geography gaps when enabled, and powers shortlist chat.
 - Web resolution and chat web search should be treated as external context, not facility evidence replacement.
-- The default map uses Plotly `Scattergeo` traces with a built-in simplified India outline, so it does not require a Mapbox token or external tile access.
+- The default map uses Dash Leaflet with OpenStreetMap tiles. The app keeps a Plotly `Scattergeo` fallback behind `ENABLE_LEAFLET_MAP=false`, so it can still render without Mapbox or external tile access.
 - The pincode file you inspected appears AP/Telangana-heavy, so city matching may fall back to facility addresses for other states.
 - Some facility rows have malformed coordinates or shifted columns; the ranking skips invalid coordinates and flags evidence gaps.

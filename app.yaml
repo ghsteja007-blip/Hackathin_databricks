@@ -28,6 +28,10 @@ env:
     value: "8"
   - name: ENABLE_WEB_RESOLUTION
     value: "true"
+  - name: ENABLE_LEAFLET_MAP
+    value: "true"
+  - name: LEAFLET_TILE_URL
+    value: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
   - name: ENABLE_TILE_MAP
     value: "false"
   - name: FACILITY_ROW_LIMIT

@@ -7,6 +7,11 @@ from typing import Any
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 import plotly.graph_objects as go
 
+try:
+    import dash_leaflet as dl
+except Exception:
+    dl = None
+
 from data_access import load_datasets
 from openai_helpers import ask_shortlist_copilot, parse_referral_query, spell_check_location
 from referral_engine import rank_facilities, resolve_location
@@ -102,37 +107,11 @@ def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
     return rendered
 
 
-_SCATTER_MAP_CLS = getattr(go, "Scattermap", None)
-_USE_TILE_MAP = (
-    _SCATTER_MAP_CLS is not None
-    and os.getenv("ENABLE_TILE_MAP", "false").lower() in {"1", "true", "yes", "on"}
-)
-
-INDIA_OUTLINE_LON = [
-    68.2, 69.3, 70.7, 72.1, 73.3, 74.5, 75.4, 76.7, 78.1, 80.0, 82.1, 84.2,
-    86.5, 88.0, 89.8, 91.2, 92.8, 94.5, 96.5, 97.4, 96.2, 94.2, 92.2, 90.0,
-    88.3, 87.2, 86.4, 85.0, 83.3, 81.5, 80.2, 79.2, 78.3, 77.2, 76.1, 74.9,
-    73.7, 72.5, 71.1, 69.8, 68.8, 68.2,
-]
-INDIA_OUTLINE_LAT = [
-    23.6, 24.9, 25.5, 26.3, 29.2, 31.0, 32.6, 34.4, 34.9, 33.8, 32.6, 31.5,
-    30.0, 28.3, 27.4, 26.7, 26.1, 27.0, 28.1, 27.0, 25.0, 24.1, 23.5, 22.5,
-    21.3, 20.1, 18.9, 17.6, 16.5, 15.4, 13.7, 11.7, 9.6, 8.1, 9.6, 12.2,
-    15.0, 18.2, 20.4, 22.1, 23.0, 23.6,
-]
-
-MAP_CITY_LABELS = [
-    {"name": "Delhi", "lat": 28.61, "lon": 77.21},
-    {"name": "Mumbai", "lat": 19.08, "lon": 72.88},
-    {"name": "Jaipur", "lat": 26.91, "lon": 75.79},
-    {"name": "Patna", "lat": 25.59, "lon": 85.14},
-    {"name": "Chennai", "lat": 13.08, "lon": 80.27},
-    {"name": "Kolkata", "lat": 22.57, "lon": 88.36},
-    {"name": "Bengaluru", "lat": 12.97, "lon": 77.59},
-]
+def _env_enabled(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).lower() in {"1", "true", "yes", "on"}
 
 
-def _finite_float(value: Any) -> float | None:
+def _safe_float(value: Any) -> float | None:
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -140,266 +119,281 @@ def _finite_float(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> dcc.Graph:
-    mapped_candidates = []
-    for c in candidates:
-        lat = _finite_float(c.get("latitude"))
-        lon = _finite_float(c.get("longitude"))
+def _candidate_points(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    points = []
+    for candidate in candidates:
+        lat = _safe_float(candidate.get("latitude"))
+        lon = _safe_float(candidate.get("longitude"))
         if lat is None or lon is None:
             continue
         if not (6 <= lat <= 38 and 68 <= lon <= 98):
             continue
-        mapped_candidates.append({**c, "_lat": lat, "_lon": lon})
+        points.append({**candidate, "_lat": lat, "_lon": lon})
+    return points
 
-    origin_lat = _finite_float(location.get("latitude"))
-    origin_lon = _finite_float(location.get("longitude"))
-    if origin_lat is None or origin_lon is None:
-        origin_lat = mapped_candidates[0]["_lat"] if mapped_candidates else 22.9734
-        origin_lon = mapped_candidates[0]["_lon"] if mapped_candidates else 78.6569
 
-    lats = [c["_lat"] for c in mapped_candidates]
-    lons = [c["_lon"] for c in mapped_candidates]
-    scores = [c.get("score", 0) for c in mapped_candidates]
-    candidate_ids = [c.get("candidate_id") for c in mapped_candidates]
+def _score_color(score: Any) -> str:
+    value = _safe_float(score) or 0
+    if value >= 85:
+        return "#0f766e"
+    if value >= 65:
+        return "#2563eb"
+    if value >= 45:
+        return "#ca8a04"
+    return "#64748b"
 
-    # Hover tooltips
+
+def _score_radius(score: Any) -> int:
+    value = _safe_float(score) or 0
+    return int(max(8, min(20, 8 + value / 8)))
+
+
+def _map_bounds(lats: list[float], lons: list[float]) -> list[list[float]]:
+    if not lats or not lons:
+        return [[6.5, 68.0], [37.5, 97.5]]
+
+    min_lat, max_lat = min(lats), max(lats)
+    min_lon, max_lon = min(lons), max(lons)
+    lat_pad = max(0.15, (max_lat - min_lat) * 0.22)
+    lon_pad = max(0.15, (max_lon - min_lon) * 0.22)
+    return [[min_lat - lat_pad, min_lon - lon_pad], [max_lat + lat_pad, max_lon + lon_pad]]
+
+
+def _leaflet_zoom(span: float) -> int:
+    if span < 0.25:
+        return 12
+    if span < 0.5:
+        return 11
+    if span < 1.0:
+        return 10
+    if span < 2.5:
+        return 9
+    if span < 5:
+        return 8
+    if span < 10:
+        return 7
+    if span < 20:
+        return 6
+    return 5
+
+
+def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> dcc.Graph:
+    lats = [candidate.get("latitude") for candidate in candidates]
+    lons = [candidate.get("longitude") for candidate in candidates]
+    names = [candidate.get("name") for candidate in candidates]
+    scores = [candidate.get("score", 0) for candidate in candidates]
+    candidate_ids = [candidate.get("candidate_id") for candidate in candidates]
+
     hover_text = []
-    for c in mapped_candidates:
-        evidence_terms: list[str] = []
-        for item in c.get("evidence", [])[:3]:
+    for candidate in candidates:
+        evidence_terms = []
+        for item in candidate.get("evidence", [])[:3]:
             evidence_terms.extend(item.get("terms", [])[:3])
         evidence_label = ", ".join(dict.fromkeys(evidence_terms)) or "No direct evidence"
         hover_text.append(
             "<br>".join(
                 [
-                    f"<b>{c.get('name') or 'Unnamed facility'}</b>",
-                    f"Distance: {c.get('distance_km', 0):.1f} km",
-                    f"Score: {c.get('score', 0):.0f}",
-                    f"Type: {c.get('facility_type') or 'facility'}",
+                    f"<b>{candidate.get('name') or 'Unnamed facility'}</b>",
+                    f"Distance: {candidate.get('distance_km', 0):.1f} km",
+                    f"Score: {candidate.get('score', 0):.0f}",
+                    f"Type: {candidate.get('facility_type') or 'facility'}",
                     f"Evidence: {evidence_label}",
                 ]
             )
         )
 
-    all_lats = lats + [origin_lat]
-    all_lons = lons + [origin_lon]
-    center_lat = sum(all_lats) / len(all_lats)
-    center_lon = sum(all_lons) / len(all_lons)
-    span = max(max(all_lats) - min(all_lats), max(all_lons) - min(all_lons), 0.05)
-    zoom = (
-        12 if span < 0.25 else
-        11 if span < 0.5  else
-        10 if span < 1.0  else
-        9  if span < 2.5  else
-        8  if span < 5    else
-        7  if span < 10   else
-        6  if span < 20   else
-        5
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scattergeo(
+            lat=lats,
+            lon=lons,
+            mode="markers",
+            text=names,
+            hovertext=hover_text,
+            hoverinfo="text",
+            marker={
+                "size": [max(10, min(26, 10 + score / 10)) for score in scores],
+                "color": scores,
+                "colorscale": [[0, "#94a3b8"], [0.45, "#f59e0b"], [1, "#0f766e"]],
+                "line": {"width": 1, "color": "#ffffff"},
+                "colorbar": {"title": "Score", "thickness": 12},
+            },
+            name="Candidate facilities",
+            customdata=candidate_ids,
+        )
+    )
+    fig.add_trace(
+        go.Scattergeo(
+            lat=[location.get("latitude")],
+            lon=[location.get("longitude")],
+            mode="markers+text",
+            text=["Search origin"],
+            textposition="bottom center",
+            hovertext=[f"<b>{location.get('label') or 'Search origin'}</b><br>{location.get('method') or ''}"],
+            hoverinfo="text",
+            marker={"size": 16, "color": "#b91c1c", "symbol": "star", "line": {"width": 1, "color": "#ffffff"}},
+            name="Search origin",
+        )
     )
 
-    origin_label = location.get("label") or "Search origin"
-    origin_hover = f"<b>{origin_label}</b><br>{location.get('method') or ''}"
+    all_lats = [float(value) for value in lats + [location.get("latitude")] if value is not None]
+    all_lons = [float(value) for value in lons + [location.get("longitude")] if value is not None]
+    center_lat = sum(all_lats) / len(all_lats)
+    center_lon = sum(all_lons) / len(all_lons)
+    span = max(max(all_lats) - min(all_lats), max(all_lons) - min(all_lons), 1.0)
+    projection_scale = max(2.5, min(18, 15 / span))
 
-    marker_colorscale = [
-        [0.0,  "#64748b"],
-        [0.35, "#f59e0b"],
-        [0.7,  "#0d9488"],
-        [1.0,  "#0f766e"],
-    ]
-    marker_colorbar = {
-        "title": {"text": "Score"},
-        "thickness": 14,
-        "len": 0.55,
-        "y": 0.72,
-        "bgcolor": "rgba(255,255,255,0.85)",
-        "bordercolor": "#dde3ea",
-        "borderwidth": 1,
-        "tickfont": {"size": 11},
-    }
-
-    fig = go.Figure()
-
-    if _USE_TILE_MAP:
-        # go.Scattermap (Plotly >= 5.24, Leaflet, no CDN/WebGL).
-        fig.add_trace(
-            _SCATTER_MAP_CLS(
-                lat=lats,
-                lon=lons,
-                mode="markers+text",
-                text=[str(i + 1) for i in range(len(mapped_candidates))],
-                textposition="middle center",
-                textfont={"size": 11, "color": "#ffffff"},
-                hovertext=hover_text,
-                hoverinfo="text",
-                marker={
-                    "size": [max(14, min(34, 14 + s / 8)) for s in scores],
-                    "color": scores,
-                    "colorscale": marker_colorscale,
-                    "opacity": 0.92,
-                    "colorbar": marker_colorbar,
-                },
-                name="Facilities",
-                customdata=candidate_ids,
-            )
-        )
-        fig.add_trace(
-            _SCATTER_MAP_CLS(
-                lat=[origin_lat],
-                lon=[origin_lon],
-                mode="markers+text",
-                text=[f"  {origin_label}"],
-                textposition="middle right",
-                textfont={"size": 12, "color": "#7f1d1d"},
-                hovertext=[origin_hover],
-                hoverinfo="text",
-                marker={"size": 24, "color": "#b91c1c", "opacity": 1.0},
-                name="Search origin",
-            )
-        )
-        fig.update_layout(
-            margin={"l": 0, "r": 0, "t": 0, "b": 0},
-            paper_bgcolor="rgba(0,0,0,0)",
-            showlegend=False,
-            hoverlabel={
-                "bgcolor": "#1e293b",
-                "bordercolor": "#334155",
-                "font": {"color": "#f8fafc", "size": 13},
-            },
-            map={
-                "style": "open-street-map",
-                "center": {"lat": center_lat, "lon": center_lon},
-                "zoom": zoom,
-            },
-        )
-
-    else:
-        line_lats: list[float | None] = []
-        line_lons: list[float | None] = []
-        for c in mapped_candidates[:12]:
-            line_lats.extend([origin_lat, c["_lat"], None])
-            line_lons.extend([origin_lon, c["_lon"], None])
-
-        fig.add_trace(
-            go.Scattergeo(
-                lat=line_lats,
-                lon=line_lons,
-                mode="lines",
-                line={"color": "rgba(15, 118, 110, 0.28)", "width": 1.5},
-                hoverinfo="skip",
-                name="Referral paths",
-            )
-        )
-        fig.add_trace(
-            go.Scattergeo(
-                lat=[item["lat"] for item in MAP_CITY_LABELS],
-                lon=[item["lon"] for item in MAP_CITY_LABELS],
-                mode="text",
-                text=[item["name"] for item in MAP_CITY_LABELS],
-                textfont={"size": 10, "color": "#64748b"},
-                hoverinfo="skip",
-                name="Reference cities",
-            )
-        )
-        fig.add_trace(
-            go.Scattergeo(
-                lat=INDIA_OUTLINE_LAT,
-                lon=INDIA_OUTLINE_LON,
-                mode="lines",
-                line={"color": "rgba(15, 118, 110, 0.35)", "width": 1.4},
-                hoverinfo="skip",
-                name="India outline",
-            )
-        )
-        fig.add_trace(
-            go.Scattergeo(
-                lat=lats,
-                lon=lons,
-                mode="markers+text",
-                text=[str(i + 1) for i in range(len(mapped_candidates))],
-                textposition="middle center",
-                textfont={"size": 11, "color": "#ffffff"},
-                hovertext=hover_text,
-                hoverinfo="text",
-                marker={
-                    "size": [max(18, min(36, 18 + float(s or 0) / 8)) for s in scores],
-                    "color": scores,
-                    "colorscale": marker_colorscale,
-                    "line": {"width": 1, "color": "#ffffff"},
-                    "colorbar": marker_colorbar,
-                },
-                name="Facilities",
-                customdata=candidate_ids,
-            )
-        )
-        fig.add_trace(
-            go.Scattergeo(
-                lat=[origin_lat],
-                lon=[origin_lon],
-                mode="markers+text",
-                text=["Origin"],
-                textposition="top center",
-                textfont={"size": 12, "color": "#7f1d1d"},
-                hovertext=[origin_hover],
-                hoverinfo="text",
-                marker={"size": 22, "color": "#b91c1c", "symbol": "star", "line": {"width": 1, "color": "#ffffff"}},
-                name="Search origin",
-            )
-        )
-        reference_lats = [item["lat"] for item in MAP_CITY_LABELS]
-        reference_lons = [item["lon"] for item in MAP_CITY_LABELS]
-        fit_lats = all_lats + reference_lats
-        fit_lons = all_lons + reference_lons
-        fit_span = max(max(fit_lats) - min(fit_lats), max(fit_lons) - min(fit_lons), 1.0)
-        projection_scale = max(2.5, min(18, 15 / fit_span))
-
-        fig.update_layout(
-            margin={"l": 0, "r": 0, "t": 0, "b": 0},
-            paper_bgcolor="#ffffff",
-            plot_bgcolor="#ffffff",
-            showlegend=False,
-            hoverlabel={
-                "bgcolor": "#1e293b",
-                "bordercolor": "#334155",
-                "font": {"color": "#f8fafc", "size": 13},
-            },
-            geo={
-                "scope": "asia",
-                "center": {"lat": center_lat, "lon": center_lon},
-                "projection": {"type": "mercator", "scale": projection_scale},
-                "showframe": False,
-                "showcoastlines": True,
-                "coastlinecolor": "#cbd5e1",
-                "showland": True,
-                "landcolor": "#f8fafc",
-                "showocean": True,
-                "oceancolor": "#e0f2fe",
-                "showlakes": True,
-                "lakecolor": "#e0f2fe",
-                "showcountries": True,
-                "countrycolor": "#cbd5e1",
-                "showsubunits": True,
-                "subunitcolor": "#e2e8f0",
-                "fitbounds": "locations",
-            },
-        )
+    fig.update_layout(
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        showlegend=False,
+        geo={
+            "scope": "asia",
+            "center": {"lat": center_lat, "lon": center_lon},
+            "projection": {"type": "mercator", "scale": projection_scale},
+            "showland": True,
+            "landcolor": "#f8fafc",
+            "showocean": True,
+            "oceancolor": "#e0f2fe",
+            "showlakes": True,
+            "lakecolor": "#e0f2fe",
+            "showcountries": True,
+            "countrycolor": "#cbd5e1",
+            "showsubunits": True,
+            "subunitcolor": "#e2e8f0",
+            "fitbounds": "locations",
+        },
+    )
 
     return dcc.Graph(
         id="candidate-map",
         figure=fig,
-        config={
-            "displayModeBar": True,
-            "scrollZoom": True,
-            "responsive": True,
-            "modeBarButtonsToRemove": ["select2d", "lasso2d"],
-            "toImageButtonOptions": {"format": "png", "scale": 2},
-        },
+        config={"displayModeBar": True, "scrollZoom": True, "responsive": True},
         className="candidate-map",
     )
 
 
+def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> Any:
+    if dl is None:
+        return render_plotly_candidate_map(location, candidates)
+
+    points = _candidate_points(candidates)
+    origin_lat = _safe_float(location.get("latitude"))
+    origin_lon = _safe_float(location.get("longitude"))
+    if origin_lat is None or origin_lon is None:
+        origin_lat = points[0]["_lat"] if points else 22.9734
+        origin_lon = points[0]["_lon"] if points else 78.6569
+
+    lats = [point["_lat"] for point in points] + [origin_lat]
+    lons = [point["_lon"] for point in points] + [origin_lon]
+    center = [sum(lats) / len(lats), sum(lons) / len(lons)]
+    span = max(max(lats) - min(lats), max(lons) - min(lons), 0.05)
+    bounds = _map_bounds(lats, lons)
+
+    tile_url = os.getenv("LEAFLET_TILE_URL", "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png")
+    tile_layer = dl.TileLayer(
+        url=tile_url,
+        attribution="&copy; OpenStreetMap contributors",
+        maxZoom=18,
+    )
+
+    origin_marker = dl.Marker(
+        id="leaflet-origin-marker",
+        position=[origin_lat, origin_lon],
+        title=location.get("label") or "Search origin",
+        children=[
+            dl.Tooltip(location.get("label") or "Search origin", sticky=True),
+            dl.Popup(
+                html.Div(
+                    className="leaflet-popup-content",
+                    children=[
+                        html.Strong(location.get("label") or "Search origin"),
+                        html.Div(location.get("method") or "Resolved search origin", className="muted"),
+                    ],
+                )
+            ),
+        ],
+    )
+
+    line_layers = []
+    marker_layers = []
+    for idx, candidate in enumerate(points, start=1):
+        candidate_id = candidate.get("candidate_id") or str(idx)
+        name = candidate.get("name") or "Unnamed facility"
+        distance = candidate.get("distance_km", 0)
+        score = candidate.get("score", 0)
+        evidence_terms = []
+        for item in candidate.get("evidence", [])[:3]:
+            evidence_terms.extend(item.get("terms", [])[:3])
+        evidence_label = ", ".join(dict.fromkeys(evidence_terms)) or "No direct evidence"
+        color = _score_color(score)
+
+        line_layers.append(
+            dl.Polyline(
+                positions=[[origin_lat, origin_lon], [candidate["_lat"], candidate["_lon"]]],
+                color=color,
+                weight=2,
+                opacity=0.35,
+                interactive=False,
+            )
+        )
+        marker_layers.append(
+            dl.CircleMarker(
+                id={"type": "leaflet-facility-marker", "index": candidate_id},
+                center=[candidate["_lat"], candidate["_lon"]],
+                radius=_score_radius(score),
+                color="#ffffff",
+                weight=2,
+                fillColor=color,
+                fillOpacity=0.92,
+                children=[
+                    dl.Tooltip(f"#{idx} {name} - {float(distance or 0):.1f} km", sticky=True),
+                    dl.Popup(
+                        html.Div(
+                            className="leaflet-popup-content",
+                            children=[
+                                html.Div(f"#{idx}", className="rank leaflet-rank"),
+                                html.Strong(name),
+                                html.Div(f"{float(distance or 0):.1f} km away - score {float(score or 0):.0f}"),
+                                html.Div(candidate.get("facility_type") or "facility", className="muted"),
+                                html.Div(f"Evidence: {evidence_label}", className="leaflet-evidence"),
+                            ],
+                        )
+                    ),
+                ],
+            )
+        )
+
+    children = [
+        tile_layer,
+        dl.LayerGroup(line_layers),
+        dl.LayerGroup([origin_marker]),
+        dl.LayerGroup(marker_layers),
+        dl.ScaleControl(position="bottomleft"),
+    ]
+
+    return dl.Map(
+        id="candidate-map",
+        children=children,
+        center=center,
+        zoom=_leaflet_zoom(span),
+        bounds=bounds,
+        scrollWheelZoom=True,
+        className="candidate-map leaflet-candidate-map",
+        style={"height": "520px", "width": "100%"},
+    )
+
+
+def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> Any:
+    if _env_enabled("ENABLE_LEAFLET_MAP", "true"):
+        return render_leaflet_candidate_map(location, candidates)
+    return render_plotly_candidate_map(location, candidates)
+
+
 def render_map_selection(candidate: dict[str, Any] | None = None) -> html.Div:
     if not candidate:
-        return html.Div("Click a numbered marker to inspect a facility.", className="muted")
+        return html.Div("Click a facility marker to inspect details.", className="muted")
 
     evidence_terms: list[str] = []
     for item in candidate.get("evidence", [])[:3]:
@@ -531,7 +525,7 @@ def render_results(
                         className="map-header",
                         children=[
                             html.H2("Referral Map"),
-                            html.Span("India-focused view: numbered candidates, route lines, hover evidence, click inspection."),
+                            html.Span("Leaflet view: drag, zoom, open popups, and click markers for evidence."),
                         ],
                     ),
                     render_candidate_map(location, candidates),
@@ -627,6 +621,7 @@ app.layout = html.Div(
         dcc.Store(id="theme-store", data="light"),
         dcc.Store(id="chat-history-store", data=[]),
         dcc.Download(id="shortlist-download"),
+        html.Div(id="chat-scroll-anchor", style={"display": "none"}),
         html.Header(
             className="app-header",
             children=[
@@ -829,7 +824,7 @@ app.layout = html.Div(
                                 html.Button("Clear", id="clear-shortlist", className="ghost-button"),
                             ],
                         ),
-                        html.Div(id="shortlist-panel-body", children=render_shortlist([])),
+                        html.Div(id="shortlist-panel-body", className="shortlist-panel-body", children=render_shortlist([])),
                         html.Button("Download CSV", id="download-shortlist", className="secondary-button full-width"),
                         html.Div(
                             className="chat-panel",
@@ -853,24 +848,42 @@ app.layout = html.Div(
                                         for item in CHAT_PROMPTS
                                     ],
                                 ),
-                                dcc.Loading(
-                                    id="chat-loading",
-                                    type="dot",
-                                    color="#0f766e",
-                                    children=html.Div(
-                                        id="chat-history",
-                                        className="chat-thread",
-                                        children=render_chat_history([]),
+                                html.Div(
+                                    className="chat-thread-shell",
+                                    children=dcc.Loading(
+                                        id="chat-loading",
+                                        type="dot",
+                                        color="#0f766e",
+                                        children=html.Div(
+                                            id="chat-history",
+                                            className="chat-thread",
+                                            children=render_chat_history([]),
+                                        ),
                                     ),
                                 ),
-                                dcc.Textarea(
-                                    id="chat-input",
-                                    className="chat-input",
-                                    placeholder="Compare my shortlist, check what evidence is missing, or look up current details...",
-                                    value="",
+                                html.Div(
+                                    className="chat-composer",
+                                    children=[
+                                        dcc.Textarea(
+                                            id="chat-input",
+                                            className="chat-input",
+                                            placeholder="Compare my shortlist, check evidence gaps, or look up current details...",
+                                            value="",
+                                        ),
+                                        html.Div(
+                                            className="chat-composer-row",
+                                            children=[
+                                                html.Div(id="chat-status", className="chat-status"),
+                                                html.Button(
+                                                    "Ask Copilot",
+                                                    id="chat-submit",
+                                                    className="primary-button chat-submit",
+                                                    n_clicks=0,
+                                                ),
+                                            ],
+                                        ),
+                                    ],
                                 ),
-                                html.Button("Ask", id="chat-submit", className="primary-button chat-submit", n_clicks=0),
-                                html.Div(id="chat-status", className="chat-status"),
                             ],
                         ),
                     ],
@@ -882,6 +895,23 @@ app.layout = html.Div(
             children="Referral support only. Verify availability, clinical fit, insurance, and emergency status before sending a patient.",
         ),
     ],
+)
+
+
+app.clientside_callback(
+    """
+    function(children) {
+        window.setTimeout(function() {
+            const thread = document.getElementById("chat-history");
+            if (thread) {
+                thread.scrollTop = thread.scrollHeight;
+            }
+        }, 50);
+        return "";
+    }
+    """,
+    Output("chat-scroll-anchor", "children"),
+    Input("chat-history", "children"),
 )
 
 
@@ -1199,11 +1229,19 @@ def run_search(
 @app.callback(
     Output("map-selection-panel", "children"),
     Input("candidate-map", "clickData"),
+    Input({"type": "leaflet-facility-marker", "index": ALL}, "n_clicks"),
     State("candidate-store", "data"),
     prevent_initial_call=True,
 )
-def update_map_selection(click_data, candidates):
+def update_map_selection(click_data, marker_clicks, candidates):
     candidates = candidates or []
+
+    triggered = ctx.triggered_id
+    if isinstance(triggered, dict) and triggered.get("type") == "leaflet-facility-marker":
+        candidate_id = triggered.get("index")
+        candidate = next((item for item in candidates if item.get("candidate_id") == candidate_id), None)
+        return render_map_selection(candidate or (candidates[0] if candidates else None))
+
     if not click_data or not click_data.get("points"):
         return render_map_selection(candidates[0] if candidates else None)
 
