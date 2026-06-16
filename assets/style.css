@@ -174,10 +174,9 @@ body {
 }
 
 .shortlist-panel {
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - 156px);
-  overflow: hidden;
+  display: block;
+  max-height: none;
+  overflow: visible;
 }
 
 label {
@@ -645,6 +644,35 @@ button {
   line-height: 1.4;
 }
 
+.public-signal {
+  margin-top: 12px;
+}
+
+.public-signal .section-label {
+  margin-top: 0;
+}
+
+.public-signal-chips,
+.public-themes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.public-themes {
+  margin-top: 8px;
+}
+
+.public-source-link {
+  margin-top: 8px;
+}
+
+.leaflet-rating {
+  margin-top: 4px;
+  color: var(--ok-ink);
+  font-weight: 700;
+}
+
 .candidate-contact {
   margin: 14px 0;
 }
@@ -663,9 +691,8 @@ button {
 }
 
 .shortlist-panel-body {
-  flex: 0 0 auto;
-  max-height: 150px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   padding-right: 2px;
 }
 
@@ -689,19 +716,13 @@ button {
 }
 
 .chat-panel {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
 
 .chat-heading {
-  flex: 0 0 auto;
-  margin-bottom: 2px;
+  margin-bottom: 12px;
 }
 
 .chat-heading h2 {
@@ -717,11 +738,10 @@ button {
 }
 
 .chat-presets {
-  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  margin-bottom: 0;
+  margin-bottom: 10px;
 }
 
 .chat-preset {
@@ -743,9 +763,8 @@ button {
 }
 
 .chat-thread {
-  height: 100%;
-  min-height: 120px;
-  max-height: none;
+  min-height: 220px;
+  max-height: 420px;
   overflow: auto;
   padding: 10px;
   border: 1px solid var(--line);
@@ -756,17 +775,8 @@ button {
   scroll-behavior: smooth;
 }
 
-.chat-thread-shell,
-#chat-loading {
-  flex: 1 1 120px;
-  min-height: 120px;
-  display: flex;
-  min-width: 0;
-}
-
-#chat-loading > div {
-  flex: 1 1 auto;
-  min-height: 0;
+.chat-thread-shell {
+  margin-top: 10px;
 }
 
 .chat-empty {
@@ -830,7 +840,7 @@ button {
 
 .chat-input {
   width: 100%;
-  min-height: 64px;
+  min-height: 84px;
   max-height: 150px;
   margin-top: 0;
   padding: 10px;
@@ -845,19 +855,15 @@ button {
 }
 
 .chat-composer {
-  flex: 0 0 auto;
-  position: sticky;
-  bottom: 0;
-  z-index: 3;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: linear-gradient(180deg, var(--panel), var(--panel-strong));
-  box-shadow: 0 -12px 28px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
 }
 
 .theme-dark .chat-composer {
-  box-shadow: 0 -12px 28px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
 }
 
 .chat-composer-row {
