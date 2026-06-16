@@ -188,8 +188,13 @@ label {
 }
 
 .query-input,
-.number-input {
+.number-input,
+.select-input {
   width: 100%;
+}
+
+.query-input,
+.number-input {
   height: 42px;
   padding: 9px 11px;
   border: 1px solid var(--input-border);
@@ -203,6 +208,58 @@ label {
 .number-input:focus {
   border-color: var(--accent);
   outline: 3px solid var(--focus-ring);
+}
+
+.select-input .Select-control {
+  height: 42px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  background: var(--input);
+  box-shadow: none;
+}
+
+.select-input .Select-control:hover {
+  border-color: var(--accent);
+}
+
+.select-input.is-focused .Select-control,
+.select-input .Select-control:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.select-input .Select-value,
+.select-input .Select-placeholder {
+  line-height: 40px;
+}
+
+.select-input .Select-value-label,
+.select-input .Select-placeholder,
+.select-input .Select-input {
+  color: var(--ink) !important;
+}
+
+.select-input .Select-menu-outer {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.select-input .Select-option {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.select-input .Select-option.is-focused,
+.select-input .Select-option.is-selected {
+  background: var(--input-soft);
+  color: var(--accent-strong);
+}
+
+.select-input .Select-arrow-zone {
+  color: var(--muted);
 }
 
 .locate-row {
@@ -598,6 +655,11 @@ button {
   background: var(--info-bg);
   color: var(--info-ink);
   text-decoration: none;
+}
+
+.chip-disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
 }
 
 .section-label {
