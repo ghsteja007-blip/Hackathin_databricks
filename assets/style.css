@@ -128,7 +128,7 @@ body {
 
 .workspace {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr) 300px;
+  grid-template-columns: 320px minmax(0, 1fr) 360px;
   gap: 20px;
   padding: 24px 36px 32px;
   align-items: start;
@@ -361,7 +361,7 @@ button {
 
 .candidate-map {
   width: 100%;
-  height: 500px;
+  height: 520px;
   border-radius: 6px;
   overflow: hidden;
   background: var(--panel-strong);
@@ -558,6 +558,127 @@ button {
 }
 
 .shortlist-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-panel {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.chat-heading {
+  margin-bottom: 12px;
+}
+
+.chat-heading h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.chat-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.chat-thread {
+  min-height: 170px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.chat-empty {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chat-thread-inner {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-message {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.chat-message-user {
+  margin-left: 28px;
+  border-color: var(--accent-muted);
+  background: var(--accent-soft);
+}
+
+.chat-message-assistant {
+  margin-right: 18px;
+}
+
+.chat-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.chat-markdown {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chat-markdown p,
+.chat-markdown ul {
+  margin: 0 0 8px;
+}
+
+.chat-markdown p:last-child,
+.chat-markdown ul:last-child {
+  margin-bottom: 0;
+}
+
+.chat-input {
+  width: 100%;
+  min-height: 92px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  resize: vertical;
+  background: var(--input);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.chat-input:focus {
+  border-color: var(--accent);
+  outline: 3px solid var(--focus-ring);
+}
+
+.chat-submit {
+  margin-top: 8px;
+}
+
+.chat-status {
+  min-height: 18px;
+  margin-top: 8px;
   color: var(--muted);
   font-size: 12px;
 }
