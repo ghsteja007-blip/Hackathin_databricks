@@ -389,6 +389,15 @@ label {
   margin: 16px 0;
 }
 
+.language-control {
+  margin: 0 0 16px;
+}
+
+.language-control label {
+  display: block;
+  margin-bottom: 6px;
+}
+
 button {
   min-height: 40px;
   border: 0;
@@ -594,6 +603,11 @@ button {
   background: rgba(255, 255, 255, 0.86);
   color: #334155;
   font-size: 10px;
+}
+
+.leaflet-numbered-marker {
+  background: transparent;
+  border: 0;
 }
 
 .theme-dark .leaflet-candidate-map .leaflet-control-attribution,
@@ -869,6 +883,40 @@ button {
 
 .candidate-contact {
   margin: 14px 0;
+}
+
+.candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0 14px;
+}
+
+.mini-action-button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.mini-action-button:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.mini-action-button--primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--accent), var(--accent-blue));
+  color: #ffffff;
+}
+
+.mini-action-button--primary:hover {
+  color: #ffffff;
 }
 
 .shortlist-header {
