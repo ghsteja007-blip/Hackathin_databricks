@@ -17,7 +17,7 @@ app = Dash(__name__, title=APP_TITLE, suppress_callback_exceptions=True)
 server = app.server
 
 
-# ── Location extraction helper ────────────────────────────────────────────────
+# Location extraction helper
 
 def _extract_location_hint(query: str) -> str:
     """
@@ -34,7 +34,7 @@ def _extract_location_hint(query: str) -> str:
     return words[-1] if words else ""
 
 
-# ── Reusable UI helpers ───────────────────────────────────────────────────────
+# Reusable UI helpers
 
 def chip(text: str, class_name: str = "chip") -> html.Span:
     return html.Span(text, className=class_name)
@@ -74,14 +74,17 @@ def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
     return rendered
 
 
-# go.Scattermap  (Plotly ≥ 5.24) – uses bundled Leaflet, no WebGL / CDN needed ✓
-# go.Scattermapbox               – needs Mapbox GL JS CDN + WebGL → blank in many Dash envs ✗
-# go.Scattergeo  (always present) – vector outline, zero dependencies, always works ✓
+# go.Scattermap  (Plotly >= 5.24) uses bundled Leaflet, no WebGL or CDN.
+# go.Scattermapbox needs Mapbox GL JS/CDN/WebGL and can render blank in apps.
+# go.Scattergeo  is always present and has zero external tile dependencies.
 #
 # We deliberately skip Scattermapbox: if Scattermap isn't available we fall
 # straight to Scattergeo so the map always renders something.
 _SCATTER_MAP_CLS = getattr(go, "Scattermap", None)   # None when Plotly < 5.24
-_USE_TILE_MAP = _SCATTER_MAP_CLS is not None
+_USE_TILE_MAP = (
+    _SCATTER_MAP_CLS is not None
+    and os.getenv("ENABLE_TILE_MAP", "false").lower() in {"1", "true", "yes", "on"}
+)
 
 
 def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> dcc.Graph:
@@ -90,8 +93,9 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
     names = [c.get("name") for c in candidates]
     scores = [c.get("score", 0) for c in candidates]
     distances = [c.get("distance_km", 0) for c in candidates]
+    candidate_ids = [c.get("candidate_id") for c in candidates]
 
-    # ── Hover tooltips ────────────────────────────────────────────────────────
+    # Hover tooltips
     hover_text = []
     for c in candidates:
         evidence_terms: list[str] = []
@@ -102,15 +106,15 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             "<br>".join(
                 [
                     f"<b>{c.get('name') or 'Unnamed facility'}</b>",
-                    f"📏 {c.get('distance_km', 0):.1f} km away",
-                    f"⭐ Score: {c.get('score', 0):.0f}",
-                    f"🏥 {c.get('facility_type') or 'facility'}",
-                    f"🔬 {evidence_label}",
+                    f"Distance: {c.get('distance_km', 0):.1f} km",
+                    f"Score: {c.get('score', 0):.0f}",
+                    f"Type: {c.get('facility_type') or 'facility'}",
+                    f"Evidence: {evidence_label}",
                 ]
             )
         )
 
-    # ── Auto-zoom & centre (shared by both renderers) ─────────────────────────
+    # Auto-zoom and center shared by both renderers.
     all_lats = [float(v) for v in lats + [location.get("latitude")] if v is not None]
     all_lons = [float(v) for v in lons + [location.get("longitude")] if v is not None]
     center_lat = sum(all_lats) / len(all_lats)
@@ -128,7 +132,7 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
     )
 
     origin_label = location.get("label") or "Search origin"
-    origin_hover = f"<b>📍 {origin_label}</b><br>{location.get('method') or ''}"
+    origin_hover = f"<b>{origin_label}</b><br>{location.get('method') or ''}"
 
     marker_colorscale = [
         [0.0,  "#64748b"],
@@ -150,14 +154,15 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
     fig = go.Figure()
 
     if _USE_TILE_MAP:
-        # ── go.Scattermap (Plotly ≥ 5.24, Leaflet, no CDN/WebGL) ────────────
-        # or go.Scattermapbox as fallback – same API surface
+        # go.Scattermap (Plotly >= 5.24, Leaflet, no CDN/WebGL).
         fig.add_trace(
             _SCATTER_MAP_CLS(
                 lat=lats,
                 lon=lons,
-                mode="markers",
-                text=names,
+                mode="markers+text",
+                text=[str(i + 1) for i in range(len(candidates))],
+                textposition="middle center",
+                textfont={"size": 11, "color": "#ffffff"},
                 hovertext=hover_text,
                 hoverinfo="text",
                 marker={
@@ -168,7 +173,7 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
                     "colorbar": marker_colorbar,
                 },
                 name="Facilities",
-                customdata=distances,
+                customdata=candidate_ids,
             )
         )
         fig.add_trace(
@@ -202,14 +207,16 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
         )
 
     else:
-        # ── go.Scattergeo fallback (always available, vector outline) ─────────
+        # go.Scattergeo fallback (always available, vector outline).
         projection_scale = max(2.5, min(18, 15 / max(span, 1.0)))
         fig.add_trace(
             go.Scattergeo(
                 lat=lats,
                 lon=lons,
-                mode="markers",
-                text=names,
+                mode="markers+text",
+                text=[str(i + 1) for i in range(len(candidates))],
+                textposition="middle center",
+                textfont={"size": 10, "color": "#ffffff"},
                 hovertext=hover_text,
                 hoverinfo="text",
                 marker={
@@ -220,6 +227,7 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
                     "colorbar": marker_colorbar,
                 },
                 name="Facilities",
+                customdata=candidate_ids,
             )
         )
         fig.add_trace(
@@ -237,8 +245,8 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
         )
         fig.update_layout(
             margin={"l": 0, "r": 0, "t": 0, "b": 0},
-            paper_bgcolor="#ffffff",
-            plot_bgcolor="#ffffff",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
             showlegend=False,
             geo={
                 "scope": "asia",
@@ -263,6 +271,37 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             "toImageButtonOptions": {"format": "png", "scale": 2},
         },
         className="candidate-map",
+    )
+
+
+def render_map_selection(candidate: dict[str, Any] | None = None) -> html.Div:
+    if not candidate:
+        return html.Div("Click a numbered marker to inspect a facility.", className="muted")
+
+    evidence_terms: list[str] = []
+    for item in candidate.get("evidence", [])[:3]:
+        evidence_terms.extend(item.get("terms", [])[:4])
+    evidence_terms = list(dict.fromkeys(evidence_terms))
+
+    return html.Div(
+        className="map-selection-card",
+        children=[
+            html.Div("Selected facility", className="section-label"),
+            html.H3(candidate.get("name") or "Unnamed facility"),
+            html.Div(
+                className="candidate-meta",
+                children=[
+                    chip(f"{candidate.get('distance_km', 0):.1f} km"),
+                    chip(f"score {candidate.get('score', 0):.0f}"),
+                    chip(candidate.get("facility_type") or "facility"),
+                ],
+            ),
+            html.Div(
+                className="warning-list",
+                children=[chip(term, "chip chip-soft") for term in evidence_terms[:6]]
+                or [chip("No direct evidence terms", "chip chip-warning")],
+            ),
+        ],
     )
 
 
@@ -344,6 +383,8 @@ def render_results(
     location_note = (
         f"{location.get('label')} via {location.get('method')} ({location.get('match_count', 0)} matches)"
     )
+    nearest = min(candidates, key=lambda candidate: candidate.get("distance_km", 10**9))
+    highest = max(candidates, key=lambda candidate: candidate.get("score", -10**9))
 
     return html.Div(
         className="results-shell",
@@ -368,6 +409,23 @@ def render_results(
                         children=[html.H2("Referral Map"), html.Span("Drag, zoom, and hover markers for facility evidence.")],
                     ),
                     render_candidate_map(location, candidates),
+                    html.Div(
+                        className="map-inspector",
+                        children=[
+                            html.Div(
+                                className="map-stats",
+                                children=[
+                                    chip(f"{len(candidates)} mapped facilities", "chip chip-soft"),
+                                    chip(
+                                        f"nearest: {nearest.get('name')} ({nearest.get('distance_km', 0):.1f} km)",
+                                        "chip chip-soft",
+                                    ),
+                                    chip(f"top score: {highest.get('name')}", "chip chip-soft"),
+                                ],
+                            ),
+                            html.Div(id="map-selection-panel", children=render_map_selection(candidates[0])),
+                        ],
+                    ),
                 ],
             ),
             html.Div(
@@ -390,7 +448,7 @@ def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
                 className="shortlist-item",
                 children=[
                     html.Strong(item.get("name") or "Unnamed facility"),
-                    html.Span(f"{item.get('distance_km', 0):.1f} km · score {item.get('score', 0):.0f}"),
+                    html.Span(f"{item.get('distance_km', 0):.1f} km - score {item.get('score', 0):.0f}"),
                 ],
             )
             for item in shortlist
@@ -398,8 +456,9 @@ def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
     )
 
 
-# ── Layout ────────────────────────────────────────────────────────────────────
+# Layout
 app.layout = html.Div(
+    id="app-root",
     className="app-shell",
     children=[
         dcc.Store(id="candidate-store", data=[]),
@@ -407,18 +466,25 @@ app.layout = html.Div(
         dcc.Store(id="geolocation-store", data=None),
         dcc.Store(id="search-mode-store", data="freetext"),
         dcc.Store(id="spell-suggestion-store", data=None),
+        dcc.Store(id="theme-store", data="light"),
         dcc.Download(id="shortlist-download"),
         html.Header(
             className="app-header",
             children=[
                 html.Div([html.H1(APP_TITLE), html.P("Evidence-attached care facility shortlists.")]),
-                html.Div(className="status-pill", children=os.getenv("DATABRICKS_SCHEMA", "local data")),
+                html.Div(
+                    className="header-actions",
+                    children=[
+                        html.Button("Dark", id="theme-toggle", className="theme-toggle", n_clicks=0),
+                        html.Div(className="status-pill", children=os.getenv("DATABRICKS_SCHEMA", "local data")),
+                    ],
+                ),
             ],
         ),
         html.Main(
             className="workspace",
             children=[
-                # ── Left sidebar: search panel ─────────────────────────────
+                # Left sidebar: search panel
                 html.Section(
                     className="search-panel",
                     children=[
@@ -430,31 +496,31 @@ app.layout = html.Div(
                                 html.P("Choose a search mode, describe what you need, then hit Search."),
                             ],
                         ),
-                        # ── Mode tab strip ────────────────────────────────
+                        # Mode tab strip
                         html.Div(
                             className="mode-tabs",
                             children=[
                                 html.Button(
-                                    ["✏️ ", html.Span("Free text")],
+                                    [html.Span("Free text")],
                                     id="mode-tab-freetext",
                                     className="mode-tab mode-tab--active",
                                     n_clicks=0,
                                 ),
                                 html.Button(
-                                    ["📌 ", html.Span("Pin code")],
+                                    [html.Span("Pin code")],
                                     id="mode-tab-pincode",
                                     className="mode-tab",
                                     n_clicks=0,
                                 ),
                                 html.Button(
-                                    ["📍 ", html.Span("My location")],
+                                    [html.Span("My location")],
                                     id="mode-tab-location",
                                     className="mode-tab",
                                     n_clicks=0,
                                 ),
                             ],
                         ),
-                        # ── Free-text panel ───────────────────────────────
+                        # Free-text panel
                         html.Div(
                             id="panel-freetext",
                             className="mode-panel",
@@ -478,7 +544,7 @@ app.layout = html.Div(
                                 ),
                             ],
                         ),
-                        # ── Pin code panel ────────────────────────────────
+                        # Pin code panel
                         html.Div(
                             id="panel-pincode",
                             className="mode-panel mode-panel--hidden",
@@ -512,7 +578,7 @@ app.layout = html.Div(
                                 ),
                             ],
                         ),
-                        # ── My-location panel ─────────────────────────────
+                        # My-location panel
                         html.Div(
                             id="panel-location",
                             className="mode-panel mode-panel--hidden",
@@ -543,7 +609,7 @@ app.layout = html.Div(
                                 ),
                             ],
                         ),
-                        # ── Spell-correction banner ────────────────────────
+                        # Spell-correction banner
                         html.Div(
                             id="spell-banner",
                             className="spell-banner spell-banner--hidden",
@@ -557,7 +623,7 @@ app.layout = html.Div(
                                 ),
                             ],
                         ),
-                        # ── Radius / results controls ──────────────────────
+                        # Radius / results controls
                         html.Div(
                             className="controls-row",
                             children=[
@@ -591,9 +657,9 @@ app.layout = html.Div(
                         html.Div(id="search-status", className="search-status"),
                     ],
                 ),
-                # ── Centre: results panel ──────────────────────────────────
+                # Center: results panel
                 html.Section(id="results-panel", className="results-panel", children=render_empty_state()),
-                # ── Right sidebar: shortlist ───────────────────────────────
+                # Right sidebar: shortlist
                 html.Aside(
                     className="shortlist-panel",
                     children=[
@@ -618,7 +684,22 @@ app.layout = html.Div(
 )
 
 
-# ── Tab switching (clientside — no server round-trip) ─────────────────────────
+# Tab switching and theme callbacks
+@app.callback(
+    Output("theme-store", "data"),
+    Output("app-root", "className"),
+    Output("theme-toggle", "children"),
+    Input("theme-toggle", "n_clicks"),
+    State("theme-store", "data"),
+)
+def toggle_theme(n_clicks: int | None, current_theme: str | None):
+    if not n_clicks:
+        theme = current_theme or "light"
+    else:
+        theme = "dark" if (current_theme or "light") == "light" else "light"
+    return theme, f"app-shell theme-{theme}", "Light" if theme == "dark" else "Dark"
+
+
 app.clientside_callback(
     """
     function(ft_clicks, pin_clicks, loc_clicks) {
@@ -658,7 +739,7 @@ app.clientside_callback(
 )
 
 
-# ── Spell-correction banner (server) ─────────────────────────────────────────
+# Spell-correction banner
 @app.callback(
     Output("spell-banner", "className"),
     Output("spell-banner-text", "children"),
@@ -675,7 +756,7 @@ def check_spelling(query: str, mode: str):
     location_text = _extract_location_hint(query)
     if not location_text or len(location_text) < 3:
         return hidden, "", None
-    # Delegate to OpenAI — same API key used throughout the app
+    # Delegate to OpenAI with the same API key used throughout the app.
     suggestion = spell_check_location(location_text)
     if not suggestion:
         return hidden, "", None
@@ -686,7 +767,7 @@ def check_spelling(query: str, mode: str):
     )
 
 
-# ── Apply spell suggestion into the query input (clientside) ──────────────────
+# Apply spell suggestion into the query input
 app.clientside_callback(
     """
     function(n_clicks, data, current_value) {
@@ -708,7 +789,7 @@ app.clientside_callback(
 )
 
 
-# ── GPS: fetch coordinates (clientside Promise) ───────────────────────────────
+# GPS: fetch coordinates
 app.clientside_callback(
     """
     function(n_clicks) {
@@ -737,14 +818,14 @@ app.clientside_callback(
 )
 
 
-# ── GPS: update status label (clientside) ────────────────────────────────────
+# GPS: update status label
 app.clientside_callback(
     """
     function(data) {
         if (!data) return '';
-        if (data.error) return '⚠️ ' + data.error;
-        var acc = data.accuracy ? ' (±' + Math.round(data.accuracy) + 'm)' : '';
-        return '✅ Location acquired' + acc;
+        if (data.error) return 'Location error: ' + data.error;
+        var acc = data.accuracy ? ' (+/-' + Math.round(data.accuracy) + 'm)' : '';
+        return 'Location acquired' + acc;
     }
     """,
     Output("gps-status", "children"),
@@ -753,7 +834,7 @@ app.clientside_callback(
 )
 
 
-# ── Main search (server) ──────────────────────────────────────────────────────
+# Main search
 @app.callback(
     Output("results-panel", "children"),
     Output("candidate-store", "data"),
@@ -784,14 +865,30 @@ def run_search(
 
     try:
         datasets, data_notes = load_datasets()
+        correction_note = ""
 
-        # ── Resolve parsed need + location per mode ───────────────────────
+        # Resolve parsed need and location per mode.
         if mode == "freetext":
             raw_query = (query or "").strip()
             if not raw_query:
                 return render_empty_state(), [], "Enter a care need and location."
             parsed = parse_referral_query(raw_query)
             location = resolve_location(parsed.location, datasets.facilities, datasets.pincodes)
+            if (not location.get("latitude") or not location.get("longitude")) and parsed.location:
+                suggestion = spell_check_location(parsed.location)
+                if suggestion:
+                    corrected_query = re.sub(re.escape(parsed.location), suggestion, raw_query, flags=re.IGNORECASE)
+                    corrected_parsed = parse_referral_query(corrected_query)
+                    corrected_location = resolve_location(
+                        corrected_parsed.location,
+                        datasets.facilities,
+                        datasets.pincodes,
+                    )
+                    if corrected_location.get("latitude") and corrected_location.get("longitude"):
+                        parsed = corrected_parsed
+                        location = corrected_location
+                        correction_note = f'Autocorrected location to "{suggestion}".'
+                        data_notes = data_notes + [f"LLM location autocorrection applied: {suggestion}"]
 
         elif mode == "pincode":
             care_need = (care_need_pin or "").strip()
@@ -832,7 +929,7 @@ def run_search(
                 )
             parsed = parse_referral_query(care_need)
             accuracy = gps.get("accuracy")
-            acc_note = f"±{int(accuracy)}m" if accuracy else ""
+            acc_note = f"+/-{int(accuracy)}m" if accuracy else ""
             location = {
                 "label": f"Your location {acc_note}".strip(),
                 "latitude": gps["latitude"],
@@ -845,7 +942,7 @@ def run_search(
         else:
             return render_empty_state(), [], "Unknown search mode."
 
-        # ── Guard: location must resolve ──────────────────────────────────
+        # Guard: location must resolve.
         if not location.get("latitude") or not location.get("longitude"):
             return (
                 html.Div(
@@ -873,7 +970,7 @@ def run_search(
         return (
             render_results(parsed_dict, location, candidates, data_notes),
             candidates,
-            f"Found {len(candidates)} candidates using {parsed.source} parsing.",
+            f"Found {len(candidates)} candidates using {parsed.source} parsing. {correction_note}".strip(),
         )
 
     except Exception as exc:
@@ -885,6 +982,22 @@ def run_search(
             [],
             "Search failed.",
         )
+
+
+@app.callback(
+    Output("map-selection-panel", "children"),
+    Input("candidate-map", "clickData"),
+    State("candidate-store", "data"),
+    prevent_initial_call=True,
+)
+def update_map_selection(click_data, candidates):
+    candidates = candidates or []
+    if not click_data or not click_data.get("points"):
+        return render_map_selection(candidates[0] if candidates else None)
+
+    candidate_id = click_data["points"][0].get("customdata")
+    candidate = next((item for item in candidates if item.get("candidate_id") == candidate_id), None)
+    return render_map_selection(candidate or (candidates[0] if candidates else None))
 
 
 @app.callback(
