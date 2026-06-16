@@ -344,6 +344,24 @@ button {
   font-size: 13px;
 }
 
+.search-loading-shell {
+  min-height: 42px;
+  margin-top: 10px;
+}
+
+.search-loading-shell .dash-spinner {
+  margin: 6px auto 0;
+}
+
+.results-loading-shell {
+  min-width: 0;
+  min-height: 300px;
+}
+
+.results-loading-shell .dash-spinner {
+  margin-top: 72px;
+}
+
 .results-panel {
   min-width: 0;
 }
@@ -778,13 +796,16 @@ button {
 }
 
 .chat-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
 
 .chat-heading {
-  margin-bottom: 12px;
+  margin-bottom: 0;
 }
 
 .chat-heading h2 {
@@ -803,7 +824,7 @@ button {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 0;
 }
 
 .chat-preset {
@@ -825,8 +846,8 @@ button {
 }
 
 .chat-thread {
-  min-height: 220px;
-  max-height: 420px;
+  min-height: 170px;
+  max-height: 320px;
   overflow: auto;
   padding: 10px;
   border: 1px solid var(--line);
@@ -838,7 +859,7 @@ button {
 }
 
 .chat-thread-shell {
-  margin-top: 10px;
+  margin-top: 0;
 }
 
 .chat-empty {
@@ -919,6 +940,7 @@ button {
 .copilot-composer {
   position: static !important;
   z-index: auto !important;
+  margin-top: 0;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
