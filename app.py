@@ -3,6 +3,7 @@ import math
 import os
 import re
 from typing import Any
+from urllib.parse import quote
 
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 import plotly.graph_objects as go
@@ -18,11 +19,25 @@ from openai_helpers import (
     enrich_candidate_public_signals,
     parse_referral_query,
     spell_check_location,
+    translate_referral_results,
 )
 from referral_engine import rank_facilities, resolve_location
 
 
 APP_TITLE = "Referral Copilot"
+LANGUAGE_OPTIONS = [
+    {"label": "English", "value": "English"},
+    {"label": "Hindi", "value": "Hindi"},
+    {"label": "Telugu", "value": "Telugu"},
+    {"label": "Tamil", "value": "Tamil"},
+    {"label": "Kannada", "value": "Kannada"},
+    {"label": "Malayalam", "value": "Malayalam"},
+    {"label": "Marathi", "value": "Marathi"},
+    {"label": "Bengali", "value": "Bengali"},
+    {"label": "Gujarati", "value": "Gujarati"},
+    {"label": "Punjabi", "value": "Punjabi"},
+    {"label": "Urdu", "value": "Urdu"},
+]
 MEDICAL_DISPLAY_TERMS = [
     "dialysis",
     "hemodialysis",
@@ -93,6 +108,66 @@ CHAT_PROMPTS = [
         "prompt": "Create a concise coordinator handoff plan for the saved shortlist, including calls to make and questions to ask.",
     },
 ]
+DEFAULT_RESULT_UI_TEXT = {
+    "need": "Need",
+    "location": "Location",
+    "terms": "Terms",
+    "unknown": "unknown",
+    "none": "none",
+    "via": "via",
+    "matches": "matches",
+    "referral_map": "Referral Map",
+    "map_instruction": "Leaflet view: drag, zoom, open popups, and click markers for evidence.",
+    "mapped_facilities": "mapped facilities",
+    "nearest": "nearest",
+    "top_score": "top score",
+    "selected_facility": "Selected facility",
+    "click_facility": "Click a facility marker to inspect details.",
+    "no_direct_evidence_terms": "No direct evidence terms",
+    "matching_evidence": "Matching evidence",
+    "missing_evidence": "Missing or suspicious evidence",
+    "no_evidence_gaps": "No obvious evidence gaps detected",
+    "no_direct_matching_evidence": "No direct matching evidence found in the facility record.",
+    "public_review_signal": "Public review signal",
+    "not_checked": "not checked or unavailable",
+    "no_review_themes": "No review themes found",
+    "open_public_source": "Open public source",
+    "rating": "rating",
+    "reviews": "reviews",
+    "public_reviews": "public reviews",
+    "adjustment": "adjustment",
+    "confidence": "confidence",
+    "website": "Website",
+    "website_unavailable": "Website unavailable",
+    "public_source": "Public source",
+    "source": "Source",
+    "call": "Call",
+    "schedule": "Schedule",
+    "save": "Save",
+    "score": "score",
+    "adjusted": "adjusted",
+    "base": "base",
+    "facility": "facility",
+    "operator_unknown": "operator unknown",
+    "location_unknown": "location unknown",
+    "km_away": "km away",
+    "evidence": "Evidence",
+    "type": "Type",
+    "candidate_facilities": "Candidate facilities",
+    "search_origin": "Search origin",
+    "resolved_search_origin": "Resolved search origin",
+    "field_specialties": "Specialties",
+    "field_procedure": "Procedure",
+    "field_equipment": "Equipment",
+    "field_capability": "Capability",
+    "field_description": "Description",
+    "field_services": "Services",
+}
+HIDDEN_DATA_NOTE_PREFIXES = (
+    "databricks sql",
+    "local csv fallback",
+    "result translation",
+)
 
 app = Dash(__name__, title=APP_TITLE, suppress_callback_exceptions=True)
 server = app.server
@@ -124,6 +199,24 @@ def _extract_location_hint(query: str) -> str:
 
 def chip(text: str, class_name: str = "chip") -> html.Span:
     return html.Span(text, className=class_name)
+
+
+def ui_text(ui_text_map: dict[str, str] | None, key: str) -> str:
+    value = (ui_text_map or {}).get(key)
+    return str(value) if value else DEFAULT_RESULT_UI_TEXT.get(key, key.replace("_", " "))
+
+
+def visible_data_notes(data_notes: list[str], warnings: list[str] | None = None) -> list[str]:
+    visible = []
+    for note in (data_notes or []) + (warnings or []):
+        text = str(note or "").strip()
+        lowered = text.lower()
+        if not text:
+            continue
+        if any(lowered.startswith(prefix) for prefix in HIDDEN_DATA_NOTE_PREFIXES):
+            continue
+        visible.append(text)
+    return visible
 
 
 def render_empty_state() -> html.Div:
@@ -187,17 +280,21 @@ def _clean_evidence_snippet(field: str, snippet: str, terms: list[str]) -> str:
     return clean[:177].rstrip(" ,.;") + "..." if len(clean) > 180 else clean
 
 
-def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
+def render_evidence(items: list[dict[str, Any]], ui_text_map: dict[str, str] | None = None) -> list[html.Div]:
     if not items:
-        return [html.Div("No direct matching evidence found in the facility record.", className="muted")]
+        return [html.Div(ui_text(ui_text_map, "no_direct_matching_evidence"), className="muted")]
 
     rendered = []
     for item in items[:6]:
         field = item.get("field", "evidence")
-        label = field.replace("_", " ").title()
+        label = ui_text(ui_text_map, f"field_{field}") if f"field_{field}" in DEFAULT_RESULT_UI_TEXT else field.replace("_", " ").title()
         terms_list = [_display_label(_humanize_evidence_text(term).lower()) for term in item.get("terms", [])[:5]]
         terms = ", ".join(dict.fromkeys(terms_list))
-        snippet = _clean_evidence_snippet(field, item.get("snippet") or "", item.get("terms", []))
+        snippet = (
+            str(item.get("snippet") or "").strip()
+            if item.get("translated")
+            else _clean_evidence_snippet(field, item.get("snippet") or "", item.get("terms", []))
+        )
         rendered.append(
             html.Div(
                 className="evidence-row",
@@ -211,14 +308,14 @@ def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
     return rendered
 
 
-def _rating_text(signal: dict[str, Any] | None) -> str:
+def _rating_text(signal: dict[str, Any] | None, ui_text_map: dict[str, str] | None = None) -> str:
     if not signal:
         return ""
     rating = signal.get("google_rating")
     count = signal.get("google_review_count")
     if rating is None:
         return ""
-    count_text = f" ({int(count):,} reviews)" if count else ""
+    count_text = f" ({int(count):,} {ui_text(ui_text_map, 'reviews')})" if count else ""
     source = signal.get("rating_source") or "public rating"
     return f"{source}: {float(rating):.1f}/5{count_text}"
 
@@ -236,14 +333,14 @@ def _first_http_url(values: list[Any] | None) -> str:
     return ""
 
 
-def render_public_signal(candidate: dict[str, Any]) -> html.Div:
+def render_public_signal(candidate: dict[str, Any], ui_text_map: dict[str, str] | None = None) -> html.Div:
     signal = candidate.get("public_signal") or {}
     if not signal:
         return html.Div(
             className="public-signal public-signal-empty",
             children=[
-                html.Div("Public review signal", className="section-label"),
-                chip("not checked or unavailable", "chip chip-soft"),
+                html.Div(ui_text(ui_text_map, "public_review_signal"), className="section-label"),
+                chip(ui_text(ui_text_map, "not_checked"), "chip chip-soft"),
             ],
         )
 
@@ -256,26 +353,26 @@ def render_public_signal(candidate: dict[str, Any]) -> html.Div:
 
     chips = []
     if rating is not None:
-        chips.append(chip(f"rating {float(rating):.1f}/5", "chip chip-ok"))
+        chips.append(chip(f"{ui_text(ui_text_map, 'rating')} {float(rating):.1f}/5", "chip chip-ok"))
     if count:
-        chips.append(chip(f"{int(count):,} public reviews", "chip chip-soft"))
+        chips.append(chip(f"{int(count):,} {ui_text(ui_text_map, 'public_reviews')}", "chip chip-soft"))
     if delta not in (None, ""):
         sign = "+" if float(delta) >= 0 else ""
-        chips.append(chip(f"{sign}{float(delta):.1f}/10 adjustment", "chip chip-soft"))
-    chips.append(chip(f"confidence: {confidence}", "chip chip-soft"))
+        chips.append(chip(f"{sign}{float(delta):.1f}/10 {ui_text(ui_text_map, 'adjustment')}", "chip chip-soft"))
+    chips.append(chip(f"{ui_text(ui_text_map, 'confidence')}: {confidence}", "chip chip-soft"))
 
     return html.Div(
         className="public-signal",
         children=[
-            html.Div("Public review signal", className="section-label"),
+            html.Div(ui_text(ui_text_map, "public_review_signal"), className="section-label"),
             html.Div(className="public-signal-chips", children=chips),
             html.Div(
                 className="public-themes",
                 children=[chip(theme, "chip chip-soft") for theme in themes[:4]]
-                or [chip(signal.get("notes") or "No review themes found", "chip chip-warning")],
+                or [chip(signal.get("notes") or ui_text(ui_text_map, "no_review_themes"), "chip chip-warning")],
             ),
             html.A(
-                "Open public source",
+                ui_text(ui_text_map, "open_public_source"),
                 href=url,
                 target="_blank",
                 rel="noreferrer",
@@ -328,6 +425,28 @@ def _score_radius(score: Any) -> int:
     return int(max(8, min(22, 8 + value * 1.2)))
 
 
+def _numbered_marker_icon(rank: int, score: Any) -> dict[str, Any]:
+    color = _score_color(score)
+    size = int(max(34, min(48, _score_radius(score) * 2 + 8)))
+    center = round(size / 2, 1)
+    radius = center - 3
+    font_size = 13 if rank < 10 else 11
+    svg = f"""
+    <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">
+      <circle cx="{center}" cy="{center}" r="{radius}" fill="{color}" fill-opacity="0.94" stroke="#ffffff" stroke-width="3"/>
+      <text x="{center}" y="{center}" dominant-baseline="middle" text-anchor="middle"
+            fill="#ffffff" font-family="Arial, sans-serif" font-size="{font_size}" font-weight="800">{rank}</text>
+    </svg>
+    """
+    return {
+        "iconUrl": f"data:image/svg+xml;charset=UTF-8,{quote(svg)}",
+        "iconSize": [size, size],
+        "iconAnchor": [center, center],
+        "popupAnchor": [0, -center],
+        "className": "leaflet-numbered-marker",
+    }
+
+
 def _score_value(score: Any) -> float:
     value = _safe_float(score)
     if value is None:
@@ -369,7 +488,11 @@ def _leaflet_zoom(span: float) -> int:
     return 5
 
 
-def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> dcc.Graph:
+def render_plotly_candidate_map(
+    location: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    ui_text_map: dict[str, str] | None = None,
+) -> dcc.Graph:
     lats = [candidate.get("latitude") for candidate in candidates]
     lons = [candidate.get("longitude") for candidate in candidates]
     names = [candidate.get("name") for candidate in candidates]
@@ -389,11 +512,11 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
                 [line for line in [
                     f"<b>{candidate.get('name') or 'Unnamed facility'}</b>",
                     f"Distance: {candidate.get('distance_km', 0):.1f} km",
-                    f"Score: {_score_text(candidate.get('score'))}",
-                    f"Base score: {_score_text(base_score)}" if base_score is not None else "",
+                    f"{ui_text(ui_text_map, 'score')}: {_score_text(candidate.get('score'))}",
+                    f"{ui_text(ui_text_map, 'base')} {_score_text(base_score)}" if base_score is not None else "",
                     rating_label,
-                    f"Type: {candidate.get('facility_type') or 'facility'}",
-                    f"Evidence: {evidence_label}",
+                    f"{ui_text(ui_text_map, 'type')}: {candidate.get('facility_type') or ui_text(ui_text_map, 'facility')}",
+                    f"{ui_text(ui_text_map, 'evidence')}: {evidence_label}",
                 ] if line]
             )
         )
@@ -416,7 +539,7 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
                 "line": {"width": 1, "color": "#ffffff"},
                 "colorbar": {"title": "Score /10", "thickness": 12},
             },
-            name="Candidate facilities",
+            name=ui_text(ui_text_map, "candidate_facilities"),
             customdata=candidate_ids,
         )
     )
@@ -425,12 +548,12 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
             lat=[location.get("latitude")],
             lon=[location.get("longitude")],
             mode="markers+text",
-            text=["Search origin"],
+            text=[ui_text(ui_text_map, "search_origin")],
             textposition="bottom center",
-            hovertext=[f"<b>{location.get('label') or 'Search origin'}</b><br>{location.get('method') or ''}"],
+            hovertext=[f"<b>{location.get('label') or ui_text(ui_text_map, 'search_origin')}</b><br>{location.get('method') or ''}"],
             hoverinfo="text",
             marker={"size": 16, "color": "#b91c1c", "symbol": "star", "line": {"width": 1, "color": "#ffffff"}},
-            name="Search origin",
+            name=ui_text(ui_text_map, "search_origin"),
         )
     )
 
@@ -472,9 +595,13 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
     )
 
 
-def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> Any:
+def render_leaflet_candidate_map(
+    location: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    ui_text_map: dict[str, str] | None = None,
+) -> Any:
     if dl is None:
-        return render_plotly_candidate_map(location, candidates)
+        return render_plotly_candidate_map(location, candidates, ui_text_map)
 
     points = _candidate_points(candidates)
     origin_lat = _safe_float(location.get("latitude"))
@@ -501,13 +628,13 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
         position=[origin_lat, origin_lon],
         title=location.get("label") or "Search origin",
         children=[
-            dl.Tooltip(location.get("label") or "Search origin", sticky=True),
+            dl.Tooltip(location.get("label") or ui_text(ui_text_map, "search_origin"), sticky=True),
             dl.Popup(
                 html.Div(
                     className="leaflet-popup-content",
                     children=[
-                        html.Strong(location.get("label") or "Search origin"),
-                        html.Div(location.get("method") or "Resolved search origin", className="muted"),
+                        html.Strong(location.get("label") or ui_text(ui_text_map, "search_origin")),
+                        html.Div(location.get("method") or ui_text(ui_text_map, "resolved_search_origin"), className="muted"),
                     ],
                 )
             ),
@@ -524,8 +651,8 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
         evidence_terms = []
         for item in candidate.get("evidence", [])[:3]:
             evidence_terms.extend(item.get("terms", [])[:3])
-        evidence_label = ", ".join(dict.fromkeys(evidence_terms)) or "No direct evidence"
-        rating_label = _rating_text(candidate.get("public_signal"))
+        evidence_label = ", ".join(dict.fromkeys(evidence_terms)) or ui_text(ui_text_map, "no_direct_evidence_terms")
+        rating_label = _rating_text(candidate.get("public_signal"), ui_text_map)
         color = _score_color(score)
 
         line_layers.append(
@@ -538,21 +665,15 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
             )
         )
         marker_layers.append(
-            dl.CircleMarker(
+            dl.Marker(
                 id={"type": "leaflet-facility-marker", "index": candidate_id},
-                center=[candidate["_lat"], candidate["_lon"]],
-                radius=_score_radius(score),
-                color="#ffffff",
-                weight=2,
-                fillColor=color,
-                fillOpacity=0.92,
+                position=[candidate["_lat"], candidate["_lon"]],
+                icon=_numbered_marker_icon(idx, score),
+                title=f"#{idx} {name} - {float(distance or 0):.1f} km - {ui_text(ui_text_map, 'score')} {_score_text(score)}",
                 children=[
                     dl.Tooltip(
-                        str(idx),
-                        permanent=True,
-                        direction="center",
-                        opacity=1,
-                        className="leaflet-marker-number",
+                        f"#{idx} {name} - {float(distance or 0):.1f} km - {ui_text(ui_text_map, 'score')} {_score_text(score)}",
+                        sticky=True,
                     ),
                     dl.Popup(
                         html.Div(
@@ -560,10 +681,13 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
                             children=[
                                 html.Div(f"#{idx}", className="rank leaflet-rank"),
                                 html.Strong(name),
-                                html.Div(f"{float(distance or 0):.1f} km away - score {_score_text(score)}"),
+                                html.Div(
+                                    f"{float(distance or 0):.1f} {ui_text(ui_text_map, 'km_away')} - "
+                                    f"{ui_text(ui_text_map, 'score')} {_score_text(score)}"
+                                ),
                                 html.Div(rating_label, className="leaflet-rating") if rating_label else None,
-                                html.Div(candidate.get("facility_type") or "facility", className="muted"),
-                                html.Div(f"Evidence: {evidence_label}", className="leaflet-evidence"),
+                                html.Div(candidate.get("facility_type") or ui_text(ui_text_map, "facility"), className="muted"),
+                                html.Div(f"{ui_text(ui_text_map, 'evidence')}: {evidence_label}", className="leaflet-evidence"),
                             ],
                         )
                     ),
@@ -591,53 +715,64 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
     )
 
 
-def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, Any]]) -> Any:
+def render_candidate_map(
+    location: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    ui_text_map: dict[str, str] | None = None,
+) -> Any:
     if _env_enabled("ENABLE_LEAFLET_MAP", "true"):
-        return render_leaflet_candidate_map(location, candidates)
-    return render_plotly_candidate_map(location, candidates)
+        return render_leaflet_candidate_map(location, candidates, ui_text_map)
+    return render_plotly_candidate_map(location, candidates, ui_text_map)
 
 
-def render_map_selection(candidate: dict[str, Any] | None = None) -> html.Div:
+def render_map_selection(
+    candidate: dict[str, Any] | None = None,
+    ui_text_map: dict[str, str] | None = None,
+) -> html.Div:
     if not candidate:
-        return html.Div("Click a facility marker to inspect details.", className="muted")
+        return html.Div(ui_text(ui_text_map, "click_facility"), className="muted")
 
     evidence_terms: list[str] = []
     for item in candidate.get("evidence", [])[:3]:
         evidence_terms.extend(item.get("terms", [])[:4])
     evidence_terms = list(dict.fromkeys(evidence_terms))
-    rating_label = _rating_text(candidate.get("public_signal"))
+    rating_label = _rating_text(candidate.get("public_signal"), ui_text_map)
 
     return html.Div(
         className="map-selection-card",
         children=[
-            html.Div("Selected facility", className="section-label"),
+            html.Div(ui_text(ui_text_map, "selected_facility"), className="section-label"),
             html.H3(candidate.get("name") or "Unnamed facility"),
             html.Div(
                 className="candidate-meta",
                 children=[
                     chip(f"{candidate.get('distance_km', 0):.1f} km"),
-                    chip(f"score {_score_text(candidate.get('score'))}"),
+                    chip(f"{ui_text(ui_text_map, 'score')} {_score_text(candidate.get('score'))}"),
                     chip(rating_label, "chip chip-ok") if rating_label else None,
-                    chip(candidate.get("facility_type") or "facility"),
+                    chip(candidate.get("facility_type") or ui_text(ui_text_map, "facility")),
                 ],
             ),
             html.Div(
                 className="warning-list",
                 children=[chip(term, "chip chip-soft") for term in evidence_terms[:6]]
-                or [chip("No direct evidence terms", "chip chip-warning")],
+                or [chip(ui_text(ui_text_map, "no_direct_evidence_terms"), "chip chip-warning")],
             ),
         ],
     )
 
 
-def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
+def render_candidate(
+    candidate: dict[str, Any],
+    rank: int,
+    ui_text_map: dict[str, str] | None = None,
+) -> html.Article:
     suspicious = candidate.get("missing_or_suspicious") or []
     evidence = candidate.get("evidence") or []
     signal = candidate.get("public_signal") or {}
     rating_url = signal.get("rating_url") if _is_http_url(signal.get("rating_url")) else ""
     source_url = rating_url or _first_http_url(candidate.get("source_urls") or [])
     website_url = str(candidate.get("website") or "").strip()
-    source_label = "Public source" if rating_url else "Source"
+    source_label = ui_text(ui_text_map, "public_source") if rating_url else ui_text(ui_text_map, "source")
     has_public_signal = bool(signal)
     base_score = _safe_float(candidate.get("base_score"))
     contact_bits = []
@@ -648,10 +783,10 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
         contact_bits.append(chip(candidate["email"], "chip chip-soft"))
     if _is_http_url(website_url):
         contact_bits.append(
-            html.A("Website", href=website_url, target="_blank", rel="noreferrer", className="chip chip-link")
+            html.A(ui_text(ui_text_map, "website"), href=website_url, target="_blank", rel="noreferrer", className="chip chip-link")
         )
     else:
-        contact_bits.append(chip("Website unavailable", "chip chip-soft chip-disabled"))
+        contact_bits.append(chip(ui_text(ui_text_map, "website_unavailable"), "chip chip-soft chip-disabled"))
     if source_url:
         contact_bits.append(
             html.A(source_label, href=source_url, target="_blank", rel="noreferrer", className="chip chip-link")
@@ -668,7 +803,11 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
                         className="score-stack",
                         children=[
                             html.Strong(f"{_score_value(candidate.get('score')):.1f}"),
-                            html.Span("/10 adjusted" if has_public_signal else "/10 score"),
+                            html.Span(
+                                f"/10 {ui_text(ui_text_map, 'adjusted')}"
+                                if has_public_signal
+                                else f"/10 {ui_text(ui_text_map, 'score')}"
+                            ),
                         ],
                     ),
                 ],
@@ -677,27 +816,38 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
                 className="candidate-meta",
                 children=[
                     chip(f"{candidate.get('distance_km', 0):.1f} km"),
-                    chip(f"base {_score_text(base_score)}", "chip chip-soft") if base_score is not None else None,
-                    chip(_rating_text(candidate.get("public_signal")), "chip chip-ok")
-                    if _rating_text(candidate.get("public_signal"))
+                    chip(f"{ui_text(ui_text_map, 'base')} {_score_text(base_score)}", "chip chip-soft") if base_score is not None else None,
+                    chip(_rating_text(candidate.get("public_signal"), ui_text_map), "chip chip-ok")
+                    if _rating_text(candidate.get("public_signal"), ui_text_map)
                     else None,
-                    chip(candidate.get("facility_type") or "facility"),
-                    chip(candidate.get("operator_type") or "operator unknown"),
-                    chip(candidate.get("city_state") or "location unknown"),
+                    chip(candidate.get("facility_type") or ui_text(ui_text_map, "facility")),
+                    chip(candidate.get("operator_type") or ui_text(ui_text_map, "operator_unknown")),
+                    chip(candidate.get("city_state") or ui_text(ui_text_map, "location_unknown")),
                 ],
             ),
-            html.Div(className="section-label", children="Matching evidence"),
-            html.Div(className="evidence-list", children=render_evidence(evidence)),
-            render_public_signal(candidate) if candidate.get("public_signal") else None,
-            html.Div(className="section-label warning-label", children="Missing or suspicious evidence"),
+            html.Div(className="section-label", children=ui_text(ui_text_map, "matching_evidence")),
+            html.Div(className="evidence-list", children=render_evidence(evidence, ui_text_map)),
+            render_public_signal(candidate, ui_text_map) if candidate.get("public_signal") else None,
+            html.Div(className="section-label warning-label", children=ui_text(ui_text_map, "missing_evidence")),
             html.Div(
                 className="warning-list",
                 children=[chip(item, "chip chip-warning") for item in suspicious[:8]]
-                or [chip("No obvious evidence gaps detected", "chip chip-ok")],
+                or [chip(ui_text(ui_text_map, "no_evidence_gaps"), "chip chip-ok")],
             ),
             html.Div(className="candidate-contact", children=contact_bits),
+            html.Div(
+                className="candidate-actions",
+                children=[
+                    html.Button(ui_text(ui_text_map, "call"), className="mini-action-button", title="Placeholder for future call workflow"),
+                    html.Button(
+                        ui_text(ui_text_map, "schedule"),
+                        className="mini-action-button mini-action-button--primary",
+                        title="Placeholder for future scheduling workflow",
+                    ),
+                ],
+            ),
             html.Button(
-                "Save",
+                ui_text(ui_text_map, "save"),
                 id={"type": "save-candidate", "index": candidate["candidate_id"]},
                 className="secondary-button",
             ),
@@ -710,6 +860,7 @@ def render_results(
     location: dict[str, Any],
     candidates: list[dict[str, Any]],
     data_notes: list[str],
+    ui_text_map: dict[str, str] | None = None,
 ) -> html.Div:
     if not candidates:
         return html.Div(
@@ -722,10 +873,12 @@ def render_results(
 
     parsed_terms = parsed.get("required_terms") or []
     location_note = (
-        f"{location.get('label')} via {location.get('method')} ({location.get('match_count', 0)} matches)"
+        f"{location.get('label')} {ui_text(ui_text_map, 'via')} "
+        f"{location.get('method')} ({location.get('match_count', 0)} {ui_text(ui_text_map, 'matches')})"
     )
     nearest = min(candidates, key=lambda candidate: candidate.get("distance_km", 10**9))
     highest = max(candidates, key=lambda candidate: candidate.get("score", -10**9))
+    notes_to_show = visible_data_notes(data_notes, location.get("warnings", []))
 
     return html.Div(
         className="results-shell",
@@ -733,51 +886,51 @@ def render_results(
             html.Div(
                 className="search-summary",
                 children=[
-                    html.Div([html.Span("Need", className="summary-label"), html.Strong(parsed.get("care_need") or "unknown")]),
-                    html.Div([html.Span("Location", className="summary-label"), html.Strong(location_note)]),
-                    html.Div([html.Span("Terms", className="summary-label"), html.Strong(", ".join(parsed_terms[:8]) or "none")]),
+                    html.Div([html.Span(ui_text(ui_text_map, "need"), className="summary-label"), html.Strong(parsed.get("care_need") or ui_text(ui_text_map, "unknown"))]),
+                    html.Div([html.Span(ui_text(ui_text_map, "location"), className="summary-label"), html.Strong(location_note)]),
+                    html.Div([html.Span(ui_text(ui_text_map, "terms"), className="summary-label"), html.Strong(", ".join(parsed_terms[:8]) or ui_text(ui_text_map, "none"))]),
                 ],
             ),
             html.Div(
                 className="data-notes",
-                children=[chip(note, "chip chip-soft") for note in data_notes[:4] + location.get("warnings", [])[:4]],
-            ),
+                children=[chip(note, "chip chip-soft") for note in notes_to_show[:4]],
+            ) if notes_to_show else None,
             html.Div(
                 className="map-panel",
                 children=[
                     html.Div(
                         className="map-header",
                         children=[
-                            html.H2("Referral Map"),
-                            html.Span("Leaflet view: drag, zoom, open popups, and click markers for evidence."),
+                            html.H2(ui_text(ui_text_map, "referral_map")),
+                            html.Span(ui_text(ui_text_map, "map_instruction")),
                         ],
                     ),
-                    render_candidate_map(location, candidates),
+                    render_candidate_map(location, candidates, ui_text_map),
                     html.Div(
                         className="map-inspector",
                         children=[
                             html.Div(
                                 className="map-stats",
                                 children=[
-                                    chip(f"{len(candidates)} mapped facilities", "chip chip-soft"),
+                                    chip(f"{len(candidates)} {ui_text(ui_text_map, 'mapped_facilities')}", "chip chip-soft"),
                                     chip(
-                                        f"nearest: {nearest.get('name')} ({nearest.get('distance_km', 0):.1f} km)",
+                                        f"{ui_text(ui_text_map, 'nearest')}: {nearest.get('name')} ({nearest.get('distance_km', 0):.1f} km)",
                                         "chip chip-soft",
                                     ),
                                     chip(
-                                        f"top score: {highest.get('name')} ({_score_text(highest.get('score'))})",
+                                        f"{ui_text(ui_text_map, 'top_score')}: {highest.get('name')} ({_score_text(highest.get('score'))})",
                                         "chip chip-soft",
                                     ),
                                 ],
                             ),
-                            html.Div(id="map-selection-panel", children=render_map_selection(candidates[0])),
+                            html.Div(id="map-selection-panel", children=render_map_selection(candidates[0], ui_text_map)),
                         ],
                     ),
                 ],
             ),
             html.Div(
                 className="candidate-list",
-                children=[render_candidate(candidate, idx + 1) for idx, candidate in enumerate(candidates)],
+                children=[render_candidate(candidate, idx + 1, ui_text_map) for idx, candidate in enumerate(candidates)],
             ),
         ],
     )
@@ -851,6 +1004,7 @@ app.layout = html.Div(
     className="app-shell",
     children=[
         dcc.Store(id="candidate-store", data=[]),
+        dcc.Store(id="result-ui-text-store", data=DEFAULT_RESULT_UI_TEXT),
         dcc.Store(id="shortlist-store", data=[]),
         dcc.Store(id="geolocation-store", data=None),
         dcc.Store(id="search-mode-store", data="freetext"),
@@ -1054,6 +1208,20 @@ app.layout = html.Div(
                                         className="select-input",
                                     ),
                                 ]),
+                            ],
+                        ),
+                        html.Div(
+                            className="language-control",
+                            children=[
+                                html.Label("Result language", htmlFor="language-select"),
+                                dcc.Dropdown(
+                                    id="language-select",
+                                    value="English",
+                                    options=LANGUAGE_OPTIONS,
+                                    clearable=False,
+                                    searchable=False,
+                                    className="select-input",
+                                ),
                             ],
                         ),
                         html.Button("Search", id="search-button", className="primary-button"),
@@ -1330,6 +1498,7 @@ app.clientside_callback(
 @app.callback(
     Output("results-panel", "children"),
     Output("candidate-store", "data"),
+    Output("result-ui-text-store", "data"),
     Output("search-status", "children"),
     Input("search-button", "n_clicks"),
     State("search-mode-store", "data"),
@@ -1339,6 +1508,7 @@ app.clientside_callback(
     State("care-need-location", "value"),
     State("radius-input", "value"),
     State("limit-input", "value"),
+    State("language-select", "value"),
     State("geolocation-store", "data"),
     prevent_initial_call=True,
 )
@@ -1351,12 +1521,14 @@ def run_search(
     care_need_loc: str,
     radius_km: int,
     limit: int,
+    display_language: str,
     geolocation_data: dict | None,
 ):
     mode = mode or "freetext"
 
     try:
         datasets, data_notes = load_datasets()
+        result_ui_text = DEFAULT_RESULT_UI_TEXT.copy()
         correction_note = ""
         try:
             radius_value = float(radius_km if radius_km not in (None, "") else 250)
@@ -1374,7 +1546,7 @@ def run_search(
         if mode == "freetext":
             raw_query = (query or "").strip()
             if not raw_query:
-                return render_empty_state(), [], "Enter a care need and location."
+                return render_empty_state(), [], result_ui_text, "Enter a care need and location."
 
             location_hint = _extract_location_hint(raw_query)
             if location_hint and len(location_hint) >= 3:
@@ -1408,7 +1580,7 @@ def run_search(
             care_need = (care_need_pin or "").strip()
             pin = re.sub(r"\D", "", (pincode or ""))
             if not care_need:
-                return render_empty_state(), [], "Enter a care need."
+                return render_empty_state(), [], result_ui_text, "Enter a care need."
             if len(pin) != 6:
                 return (
                     html.Div(
@@ -1419,6 +1591,7 @@ def run_search(
                         ],
                     ),
                     [],
+                    result_ui_text,
                     "Enter a 6-digit pin code.",
                 )
             parsed = parse_referral_query(f"{care_need} near {pin}")
@@ -1427,7 +1600,7 @@ def run_search(
         elif mode == "location":
             care_need = (care_need_loc or "").strip()
             if not care_need:
-                return render_empty_state(), [], "Enter a care need."
+                return render_empty_state(), [], result_ui_text, "Enter a care need."
             gps = geolocation_data or {}
             if not gps.get("latitude") or gps.get("error"):
                 return (
@@ -1439,6 +1612,7 @@ def run_search(
                         ],
                     ),
                     [],
+                    result_ui_text,
                     "Tap 'Use My Location' first.",
                 )
             parsed = parse_referral_query(care_need)
@@ -1454,7 +1628,7 @@ def run_search(
             }
 
         else:
-            return render_empty_state(), [], "Unknown search mode."
+            return render_empty_state(), [], result_ui_text, "Unknown search mode."
 
         # Guard: location must resolve.
         if not location.get("latitude") or not location.get("longitude"):
@@ -1469,6 +1643,7 @@ def run_search(
                     ],
                 ),
                 [],
+                result_ui_text,
                 "Location could not be resolved from the current datasets.",
             )
 
@@ -1489,9 +1664,19 @@ def run_search(
                 data_notes = data_notes + [f"Public review signal: {public_note}"]
 
         parsed_dict = parsed.to_dict()
+        translation_note = None
+        if candidates and (display_language or "English").strip().lower() != "english":
+            candidates, parsed_dict, result_ui_text, translation_note = translate_referral_results(
+                candidates,
+                parsed_dict,
+                display_language or "English",
+                DEFAULT_RESULT_UI_TEXT,
+            )
+
         return (
-            render_results(parsed_dict, location, candidates, data_notes),
+            render_results(parsed_dict, location, candidates, data_notes, result_ui_text),
             candidates,
+            result_ui_text,
             (
                 f"Found {len(candidates)} candidates within {radius_value:g} km "
                 f"(showing up to {limit_value}) using {parsed.source} parsing. {correction_note}"
@@ -1505,6 +1690,7 @@ def run_search(
                 children=[html.H2("Search failed"), html.P(str(exc))],
             ),
             [],
+            DEFAULT_RESULT_UI_TEXT,
             "Search failed.",
         )
 
@@ -1514,23 +1700,24 @@ def run_search(
     Input("candidate-map", "clickData"),
     Input({"type": "leaflet-facility-marker", "index": ALL}, "n_clicks"),
     State("candidate-store", "data"),
+    State("result-ui-text-store", "data"),
     prevent_initial_call=True,
 )
-def update_map_selection(click_data, marker_clicks, candidates):
+def update_map_selection(click_data, marker_clicks, candidates, result_ui_text):
     candidates = candidates or []
 
     triggered = ctx.triggered_id
     if isinstance(triggered, dict) and triggered.get("type") == "leaflet-facility-marker":
         candidate_id = triggered.get("index")
         candidate = next((item for item in candidates if item.get("candidate_id") == candidate_id), None)
-        return render_map_selection(candidate or (candidates[0] if candidates else None))
+        return render_map_selection(candidate or (candidates[0] if candidates else None), result_ui_text)
 
     if not click_data or not click_data.get("points"):
-        return render_map_selection(candidates[0] if candidates else None)
+        return render_map_selection(candidates[0] if candidates else None, result_ui_text)
 
     candidate_id = click_data["points"][0].get("customdata")
     candidate = next((item for item in candidates if item.get("candidate_id") == candidate_id), None)
-    return render_map_selection(candidate or (candidates[0] if candidates else None))
+    return render_map_selection(candidate or (candidates[0] if candidates else None), result_ui_text)
 
 
 @app.callback(

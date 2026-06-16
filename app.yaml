@@ -22,6 +22,8 @@ env:
     value: "gpt-4o-mini"
   - name: OPENAI_SPELL_MODEL
     value: "gpt-4o-mini"
+  - name: OPENAI_TRANSLATION_MODEL
+    value: "gpt-4o-mini"
   - name: OPENAI_CHAT_MODEL
     value: "gpt-4o"
   - name: OPENAI_SEARCH_MODEL
@@ -40,6 +42,8 @@ env:
     value: "21600"
   - name: PUBLIC_REVIEW_CACHE_MAX_ENTRIES
     value: "64"
+  - name: RESULT_TRANSLATION_CACHE_TTL_SECONDS
+    value: "21600"
   - name: OPENAI_RATE_LIMIT_RETRY_SECONDS
     value: "22"
   - name: ENABLE_LEAFLET_MAP

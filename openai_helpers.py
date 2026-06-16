@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ DEFAULT_PUBLIC_SIGNAL_CACHE_SECONDS = 6 * 60 * 60
 
 
 _PUBLIC_SIGNAL_CACHE: dict[str, tuple[float, dict[str, dict[str, Any]], str | None]] = {}
+_TRANSLATION_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def _model_for(env_name: str, fallback: str = DEFAULT_OPENAI_MODEL) -> str:
@@ -654,6 +656,222 @@ def enrich_candidate_public_signals(
     note = payload.get("note") or "Public ratings and official website links checked with one LLM web-search call."
     _set_cached_public_signals(cache_key, signals, str(note))
     return _apply_public_signals(candidates, signals), str(note)
+
+
+def _translation_cache_key(
+    language: str,
+    parsed: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    ui_text: dict[str, str] | None = None,
+) -> str:
+    payload = {
+        "language": language,
+        "ui_text": ui_text or {},
+        "care_need": parsed.get("care_need"),
+        "terms": parsed.get("required_terms", [])[:10],
+        "candidates": [
+            {
+                "candidate_id": item.get("candidate_id"),
+                "facility_type": item.get("facility_type"),
+                "operator_type": item.get("operator_type"),
+                "evidence": [
+                    {
+                        "field": evidence.get("field"),
+                        "terms": evidence.get("terms", [])[:6],
+                        "snippet": evidence.get("snippet", ""),
+                    }
+                    for evidence in item.get("evidence", [])[:6]
+                ],
+                "missing_or_suspicious": item.get("missing_or_suspicious", [])[:8],
+                "public_signal": {
+                    "review_themes": (item.get("public_signal") or {}).get("review_themes", [])[:4],
+                    "notes": (item.get("public_signal") or {}).get("notes", ""),
+                },
+            }
+            for item in candidates[:25]
+        ],
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+
+
+def _translation_cache_ttl_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("RESULT_TRANSLATION_CACHE_TTL_SECONDS", "21600")))
+    except ValueError:
+        return 21600.0
+
+
+def _translation_payload(
+    parsed: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    ui_text: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ui_text": ui_text or {},
+        "parsed": {
+            "care_need": parsed.get("care_need"),
+            "required_terms": parsed.get("required_terms", [])[:10],
+        },
+        "candidates": [
+            {
+                "candidate_id": item.get("candidate_id"),
+                "facility_type": item.get("facility_type"),
+                "operator_type": item.get("operator_type"),
+                "evidence": [
+                    {
+                        "field": evidence.get("field"),
+                        "terms": evidence.get("terms", [])[:6],
+                        "snippet": evidence.get("snippet", ""),
+                    }
+                    for evidence in item.get("evidence", [])[:6]
+                ],
+                "missing_or_suspicious": item.get("missing_or_suspicious", [])[:8],
+                "public_signal": {
+                    "review_themes": (item.get("public_signal") or {}).get("review_themes", [])[:4],
+                    "notes": (item.get("public_signal") or {}).get("notes", ""),
+                },
+            }
+            for item in candidates[:25]
+        ],
+    }
+
+
+def _apply_translation_payload(
+    candidates: list[dict[str, Any]],
+    parsed: dict[str, Any],
+    ui_text: dict[str, str] | None,
+    translated: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str]]:
+    updated_candidates = copy.deepcopy(candidates)
+    updated_parsed = copy.deepcopy(parsed)
+    updated_ui_text = copy.deepcopy(ui_text or {})
+
+    translated_ui_text = translated.get("ui_text") or {}
+    if isinstance(translated_ui_text, dict):
+        for key, value in translated_ui_text.items():
+            if key in updated_ui_text and str(value).strip():
+                updated_ui_text[key] = str(value)
+
+    translated_parsed = translated.get("parsed") or {}
+    if translated_parsed.get("care_need"):
+        updated_parsed["care_need"] = str(translated_parsed["care_need"])
+    if isinstance(translated_parsed.get("required_terms"), list):
+        updated_parsed["required_terms"] = [str(term) for term in translated_parsed["required_terms"][:10] if str(term).strip()]
+
+    by_id = {
+        str(item.get("candidate_id") or ""): item
+        for item in translated.get("candidates", [])
+        if isinstance(item, dict)
+    }
+
+    for candidate in updated_candidates:
+        patch = by_id.get(str(candidate.get("candidate_id") or ""))
+        if not patch:
+            continue
+
+        if patch.get("facility_type"):
+            candidate["facility_type"] = str(patch["facility_type"])
+        if patch.get("operator_type"):
+            candidate["operator_type"] = str(patch["operator_type"])
+
+        evidence_patch = patch.get("evidence") or []
+        if isinstance(evidence_patch, list):
+            for idx, evidence in enumerate((candidate.get("evidence") or [])[: len(evidence_patch)]):
+                translated_evidence = evidence_patch[idx] if isinstance(evidence_patch[idx], dict) else {}
+                if isinstance(translated_evidence.get("terms"), list):
+                    evidence["terms"] = [str(term) for term in translated_evidence["terms"][:6] if str(term).strip()]
+                if translated_evidence.get("snippet"):
+                    evidence["snippet"] = str(translated_evidence["snippet"])
+                    evidence["translated"] = True
+
+        if isinstance(patch.get("missing_or_suspicious"), list):
+            candidate["missing_or_suspicious"] = [
+                str(item)
+                for item in patch["missing_or_suspicious"][:8]
+                if str(item).strip()
+            ]
+
+        signal = candidate.get("public_signal") or {}
+        signal_patch = patch.get("public_signal") or {}
+        if isinstance(signal_patch.get("review_themes"), list):
+            signal["review_themes"] = [
+                str(item)
+                for item in signal_patch["review_themes"][:4]
+                if str(item).strip()
+            ]
+        if signal_patch.get("notes"):
+            signal["notes"] = str(signal_patch["notes"])
+        if signal:
+            candidate["public_signal"] = signal
+
+    return updated_candidates, updated_parsed, updated_ui_text
+
+
+def translate_referral_results(
+    candidates: list[dict[str, Any]],
+    parsed: dict[str, Any],
+    language: str,
+    ui_text: dict[str, str] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str], str | None]:
+    language = (language or "English").strip()
+    if not language or language.lower() == "english" or not candidates:
+        return candidates, parsed, ui_text or {}, None
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return candidates, parsed, ui_text or {}, "Translation skipped: OpenAI is not configured."
+
+    cache_key = _translation_cache_key(language, parsed, candidates, ui_text)
+    cached = _TRANSLATION_CACHE.get(cache_key)
+    ttl = _translation_cache_ttl_seconds()
+    if cached and ttl > 0 and (time.time() - cached[0]) <= ttl:
+        cached_candidates, cached_parsed, cached_ui_text = _apply_translation_payload(candidates, parsed, ui_text, cached[1])
+        return cached_candidates, cached_parsed, cached_ui_text, None
+
+    try:
+        client = _openai_client(api_key)
+    except Exception:
+        return candidates, parsed, ui_text or {}, "Translation skipped: OpenAI SDK unavailable."
+
+    system = (
+        "You translate healthcare referral result text for Indian care coordinators. "
+        "Translate only user-facing explanatory text into the requested language. "
+        "Do not translate hospital/facility names, phone numbers, emails, URLs, pin codes, coordinates, IDs, or proper nouns. "
+        "Translate every value under ui_text. Keep every ui_text key exactly unchanged. "
+        "Keep medical terms accurate; transliterate only when that is more natural for the target language. "
+        "Return compact JSON only."
+    )
+    payload = _translation_payload(parsed, candidates, ui_text)
+    prompt = (
+        f"Target language: {language}\n\n"
+        "Translate this JSON and return the same shape. Preserve candidate_id values exactly.\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+
+    try:
+        response = _responses_create_with_retry(
+            client,
+            model=_model_for("OPENAI_TRANSLATION_MODEL", DEFAULT_SPELL_MODEL),
+            input=[
+                {"role": "developer", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        translated = _extract_json(getattr(response, "output_text", "") or "")
+        if ttl > 0:
+            _TRANSLATION_CACHE[cache_key] = (time.time(), translated)
+            while len(_TRANSLATION_CACHE) > 64:
+                oldest_key = min(_TRANSLATION_CACHE, key=lambda key: _TRANSLATION_CACHE[key][0])
+                _TRANSLATION_CACHE.pop(oldest_key, None)
+        translated_candidates, translated_parsed, translated_ui_text = _apply_translation_payload(
+            candidates,
+            parsed,
+            ui_text,
+            translated,
+        )
+        return translated_candidates, translated_parsed, translated_ui_text, None
+    except Exception as exc:
+        return candidates, parsed, ui_text or {}, _friendly_openai_unavailable_message(exc, "Result translation")
 
 
 def ask_shortlist_copilot(question: str, shortlist: list[dict[str, Any]]) -> dict[str, Any]:
