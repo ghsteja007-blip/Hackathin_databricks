@@ -547,7 +547,13 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
                 fillColor=color,
                 fillOpacity=0.92,
                 children=[
-                    dl.Tooltip(f"#{idx} {name} - {float(distance or 0):.1f} km - {_score_text(score)}", sticky=True),
+                    dl.Tooltip(
+                        str(idx),
+                        permanent=True,
+                        direction="center",
+                        opacity=1,
+                        className="leaflet-marker-number",
+                    ),
                     dl.Popup(
                         html.Div(
                             className="leaflet-popup-content",
@@ -1479,7 +1485,7 @@ def run_search(
                 care_need=parsed.care_need,
                 location_label=location.get("label") or parsed.location,
             )
-            if public_note:
+            if public_note and re.search(r"\b(skipped|unavailable|rate-limited|returned no)\b", public_note, re.IGNORECASE):
                 data_notes = data_notes + [f"Public review signal: {public_note}"]
 
         parsed_dict = parsed.to_dict()
