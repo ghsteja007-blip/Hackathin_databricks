@@ -23,6 +23,54 @@ from referral_engine import rank_facilities, resolve_location
 
 
 APP_TITLE = "Referral Copilot"
+MEDICAL_DISPLAY_TERMS = [
+    "dialysis",
+    "hemodialysis",
+    "renal failure treatment",
+    "kidney transplant",
+    "nephrology",
+    "urology",
+    "internal medicine",
+    "emergency services",
+    "trauma care",
+    "icu",
+    "intensive care",
+    "ct scan",
+    "echocardiography",
+    "pathology laboratory",
+    "dialysis machines",
+    "cardiology",
+    "cardiothoracic surgery",
+    "gastroenterology",
+    "medical oncology",
+    "neurosurgery",
+    "pediatric surgery",
+    "pediatrics",
+    "neonatology",
+    "perinatal medicine",
+    "pediatric critical care",
+    "pediatric cardiology",
+    "pediatric gastroenterology",
+    "gynecology and obstetrics",
+    "orthopedic surgery",
+    "ophthalmology",
+    "otolaryngology",
+    "plastic surgery",
+    "cosmetic dentistry",
+    "preventive health checkup",
+    "video laryngoscopy",
+]
+NOISY_EVIDENCE_MARKERS = [
+    "hexahealth",
+    "listed as",
+    "top hospital",
+    "best hospital",
+    "book appointment",
+    "public feedback",
+    "rating",
+    "reviews",
+    "near me",
+]
 CHAT_PROMPTS = [
     {
         "id": "compare",
@@ -90,15 +138,66 @@ def render_empty_state() -> html.Div:
     )
 
 
+def _humanize_evidence_text(text: Any) -> str:
+    cleaned = str(text or "")
+    cleaned = re.sub(r"([a-z])([A-Z])", r"\1 \2", cleaned)
+    cleaned = cleaned.replace("&", " and ")
+    cleaned = re.sub(r"[_|;/]+", ", ", cleaned)
+    cleaned = re.sub(r"\b([A-Za-z][A-Za-z0-9+.-]*)(?:\s+\1\b){1,}", r"\1", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;")
+    return cleaned
+
+
+def _evidence_is_noisy(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in NOISY_EVIDENCE_MARKERS)
+
+
+def _display_label(text: str) -> str:
+    words = text.split()
+    short_words = {"icu", "ct", "ivf", "iui"}
+    return " ".join(word.upper() if word.lower() in short_words else word.capitalize() for word in words)
+
+
+def _clean_evidence_snippet(field: str, snippet: str, terms: list[str]) -> str:
+    text = _humanize_evidence_text(snippet)
+    if not text:
+        return ""
+
+    lowered = text.lower()
+    concepts: list[str] = []
+    for term in terms:
+        normalized = _humanize_evidence_text(term).lower()
+        if normalized and normalized not in concepts:
+            concepts.append(normalized)
+
+    for term in MEDICAL_DISPLAY_TERMS:
+        if re.search(rf"\b{re.escape(term)}\b", lowered, flags=re.IGNORECASE) and term not in concepts:
+            concepts.append(term)
+
+    if field in {"specialties", "procedure", "equipment", "capability"} and concepts:
+        return "Record mentions: " + ", ".join(_display_label(term) for term in concepts[:10]) + "."
+
+    if _evidence_is_noisy(text):
+        return "Record matched this field, but the source text looks directory-style; verify directly."
+
+    sentences = [part.strip(" ,;") for part in re.split(r"(?<=[.!?])\s+|\s{2,}", text) if part.strip(" ,;")]
+    filtered = [part for part in sentences if not _evidence_is_noisy(part)]
+    clean = " ".join(filtered or sentences or [text])
+    return clean[:177].rstrip(" ,.;") + "..." if len(clean) > 180 else clean
+
+
 def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
     if not items:
         return [html.Div("No direct matching evidence found in the facility record.", className="muted")]
 
     rendered = []
     for item in items[:6]:
-        label = item.get("field", "evidence").replace("_", " ").title()
-        terms = ", ".join(item.get("terms", [])[:5])
-        snippet = item.get("snippet") or ""
+        field = item.get("field", "evidence")
+        label = field.replace("_", " ").title()
+        terms_list = [_display_label(_humanize_evidence_text(term).lower()) for term in item.get("terms", [])[:5]]
+        terms = ", ".join(dict.fromkeys(terms_list))
+        snippet = _clean_evidence_snippet(field, item.get("snippet") or "", item.get("terms", []))
         rendered.append(
             html.Div(
                 className="evidence-row",
@@ -952,11 +1051,23 @@ app.layout = html.Div(
                             ],
                         ),
                         html.Button("Search", id="search-button", className="primary-button"),
-                        html.Div(id="search-status", className="search-status"),
+                        dcc.Loading(
+                            id="search-status-loading",
+                            type="circle",
+                            color="#0f766e",
+                            className="search-loading-shell",
+                            children=html.Div(id="search-status", className="search-status"),
+                        ),
                     ],
                 ),
                 # Center: results panel
-                html.Section(id="results-panel", className="results-panel", children=render_empty_state()),
+                dcc.Loading(
+                    id="results-loading",
+                    type="circle",
+                    color="#0f766e",
+                    className="results-loading-shell",
+                    children=html.Section(id="results-panel", className="results-panel", children=render_empty_state()),
+                ),
                 # Right sidebar: shortlist
                 html.Aside(
                     className="shortlist-panel",
@@ -993,6 +1104,19 @@ app.layout = html.Div(
                                     ],
                                 ),
                                 html.Div(
+                                    className="chat-thread-shell",
+                                    children=dcc.Loading(
+                                        id="chat-loading",
+                                        type="dot",
+                                        color="#0f766e",
+                                        children=html.Div(
+                                            id="chat-history",
+                                            className="chat-thread",
+                                            children=render_chat_history([]),
+                                        ),
+                                    ),
+                                ),
+                                html.Div(
                                     className="copilot-composer",
                                     children=[
                                         dcc.Textarea(
@@ -1014,19 +1138,6 @@ app.layout = html.Div(
                                             ],
                                         ),
                                     ],
-                                ),
-                                html.Div(
-                                    className="chat-thread-shell",
-                                    children=dcc.Loading(
-                                        id="chat-loading",
-                                        type="dot",
-                                        color="#0f766e",
-                                        children=html.Div(
-                                            id="chat-history",
-                                            className="chat-thread",
-                                            children=render_chat_history([]),
-                                        ),
-                                    ),
                                 ),
                             ],
                         ),

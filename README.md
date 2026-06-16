@@ -12,6 +12,7 @@ Dash app for evidence-attached referral shortlists from the `databricks_virtue_f
 - Displays an interactive Leaflet referral map with tile basemap, facility popups, route lines, hover evidence, and click-to-inspect details.
 - Includes a light/dark theme toggle.
 - Shows matching evidence, missing or suspicious evidence, and a saveable shortlist.
+- Shows a visible loading spinner while search callbacks run, keeps the Copilot composer below the scrollable chat history, and cleans noisy facility-record snippets before displaying evidence.
 - Uses one optional OpenAI web-search call after ranking to enrich the shortlist with public rating/review signals and official hospital website links when confidently visible, then applies the earlier 0-10 public-rating adjustment separately from source-data evidence. The lookup is cached and rate-limit aware so a temporary OpenAI 429 does not break the referral results.
 - Adds a shortlist chat copilot that can compare saved facilities and use OpenAI web search for fresh external details when needed.
 
