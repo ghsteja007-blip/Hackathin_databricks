@@ -854,7 +854,9 @@ button {
   line-height: 1.4;
 }
 
-.chat-composer {
+.copilot-composer {
+  position: static !important;
+  z-index: auto !important;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -862,11 +864,11 @@ button {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
 }
 
-.theme-dark .chat-composer {
+.theme-dark .copilot-composer {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
 }
 
-.chat-composer-row {
+.copilot-composer-row {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1118,7 +1120,7 @@ button {
     height: 360px;
   }
 
-  .chat-composer-row {
+  .copilot-composer-row {
     align-items: stretch;
     flex-direction: column;
   }
