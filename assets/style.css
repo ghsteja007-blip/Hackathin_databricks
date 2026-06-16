@@ -9,6 +9,12 @@
   --accent-dark: #115e59;
   --accent-soft: #f0fdfa;
   --accent-muted: #ccfbf1;
+  --accent-blue: #2563eb;
+  --accent-blue-soft: #eff6ff;
+  --accent-rose: #e11d48;
+  --accent-rose-soft: #fff1f2;
+  --accent-gold: #ca8a04;
+  --accent-gold-soft: #fefce8;
   --input: #ffffff;
   --input-soft: #f8fafc;
   --input-border: #cbd5e1;
@@ -41,7 +47,8 @@ body {
 .app-shell {
   min-height: 100vh;
   background:
-    radial-gradient(circle at top left, rgba(15, 118, 110, 0.08), transparent 28%),
+    linear-gradient(135deg, rgba(15, 118, 110, 0.1), transparent 34%),
+    linear-gradient(245deg, rgba(37, 99, 235, 0.08), transparent 42%),
     var(--bg);
 }
 
@@ -56,6 +63,12 @@ body {
   --accent-dark: #14b8a6;
   --accent-soft: #123f38;
   --accent-muted: #19584f;
+  --accent-blue: #60a5fa;
+  --accent-blue-soft: #12263f;
+  --accent-rose: #fb7185;
+  --accent-rose-soft: #3a1420;
+  --accent-gold: #facc15;
+  --accent-gold-soft: #332b0b;
   --input: #0d1511;
   --input-soft: #132019;
   --input-border: #3a4c42;
@@ -74,6 +87,7 @@ body {
 }
 
 .app-header {
+  position: relative;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -82,6 +96,14 @@ body {
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.86);
   backdrop-filter: blur(14px);
+}
+
+.app-header::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-blue), var(--accent-rose), var(--accent-gold));
 }
 
 .theme-dark .app-header {
@@ -138,7 +160,7 @@ body {
 .shortlist-panel,
 .candidate-card,
 .empty-state {
-  background: var(--panel);
+  background: linear-gradient(180deg, var(--panel), var(--panel-strong));
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
@@ -226,8 +248,9 @@ button {
 
 .primary-button {
   width: 100%;
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), var(--accent-blue));
   color: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 118, 110, 0.22);
 }
 
 .primary-button:hover {
@@ -295,10 +318,19 @@ button {
 .search-summary > div {
   min-width: 0;
   padding: 13px;
-  background: var(--panel);
+  background: linear-gradient(180deg, var(--panel), var(--panel-strong));
   border: 1px solid var(--line);
+  border-top: 4px solid var(--accent);
   border-radius: 8px;
   box-shadow: var(--shadow);
+}
+
+.search-summary > div:nth-child(2) {
+  border-top-color: var(--accent-blue);
+}
+
+.search-summary > div:nth-child(3) {
+  border-top-color: var(--accent-gold);
 }
 
 .summary-label {
@@ -334,7 +366,7 @@ button {
 .map-panel {
   margin-bottom: 14px;
   padding: 14px;
-  background: var(--panel);
+  background: linear-gradient(180deg, var(--panel), var(--panel-strong));
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
@@ -364,7 +396,11 @@ button {
   height: 520px;
   border-radius: 6px;
   overflow: hidden;
-  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(15, 118, 110, 0.06), rgba(37, 99, 235, 0.04)),
+    var(--panel-strong);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
 }
 
 .map-inspector {
@@ -386,7 +422,7 @@ button {
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--panel-strong);
+  background: linear-gradient(180deg, var(--panel), var(--panel-strong));
 }
 
 .map-selection-card h3 {
@@ -404,6 +440,14 @@ button {
 
 .candidate-card {
   padding: 18px;
+  border-top: 4px solid var(--accent);
+  transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
+}
+
+.candidate-card:hover {
+  transform: translateY(-2px);
+  border-top-color: var(--accent-blue);
+  box-shadow: 0 20px 46px rgba(15, 23, 42, 0.12);
 }
 
 .candidate-topline {
@@ -420,6 +464,13 @@ button {
 }
 
 .rank {
+  display: inline-flex;
+  min-width: 36px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent-soft);
   color: var(--accent);
   font-weight: 800;
   font-size: 13px;
@@ -433,7 +484,7 @@ button {
   align-content: center;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--input-soft);
+  background: linear-gradient(180deg, var(--accent-blue-soft), var(--input-soft));
   flex: 0 0 auto;
 }
 
@@ -584,6 +635,31 @@ button {
   line-height: 1.35;
 }
 
+.chat-presets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.chat-preset {
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--input-soft);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+
+.chat-preset:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .chat-thread {
   min-height: 170px;
   max-height: 360px;
@@ -591,7 +667,9 @@ button {
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--panel-strong);
+  background:
+    linear-gradient(180deg, rgba(37, 99, 235, 0.05), rgba(15, 118, 110, 0.04)),
+    var(--panel-strong);
 }
 
 .chat-empty {
@@ -611,17 +689,18 @@ button {
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--panel);
+  background: linear-gradient(180deg, var(--panel), var(--panel-strong));
 }
 
 .chat-message-user {
   margin-left: 28px;
   border-color: var(--accent-muted);
-  background: var(--accent-soft);
+  background: linear-gradient(180deg, var(--accent-soft), var(--panel));
 }
 
 .chat-message-assistant {
   margin-right: 18px;
+  border-color: rgba(37, 99, 235, 0.25);
 }
 
 .chat-meta {
