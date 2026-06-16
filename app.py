@@ -276,14 +276,12 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
 
         fig.add_trace(
             go.Scattergeo(
-                lat=INDIA_OUTLINE_LAT,
-                lon=INDIA_OUTLINE_LON,
+                lat=line_lats,
+                lon=line_lons,
                 mode="lines",
-                fill="toself",
-                fillcolor="rgba(240, 253, 250, 0.92)",
-                line={"color": "rgba(15, 118, 110, 0.55)", "width": 1.6},
+                line={"color": "rgba(15, 118, 110, 0.28)", "width": 1.5},
                 hoverinfo="skip",
-                name="India",
+                name="Referral paths",
             )
         )
         fig.add_trace(
@@ -299,12 +297,12 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
         )
         fig.add_trace(
             go.Scattergeo(
-                lat=line_lats,
-                lon=line_lons,
+                lat=INDIA_OUTLINE_LAT,
+                lon=INDIA_OUTLINE_LON,
                 mode="lines",
-                line={"color": "rgba(15, 118, 110, 0.28)", "width": 1.5},
+                line={"color": "rgba(15, 118, 110, 0.35)", "width": 1.4},
                 hoverinfo="skip",
-                name="Referral paths",
+                name="India outline",
             )
         )
         fig.add_trace(
@@ -342,10 +340,17 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
                 name="Search origin",
             )
         )
+        reference_lats = [item["lat"] for item in MAP_CITY_LABELS]
+        reference_lons = [item["lon"] for item in MAP_CITY_LABELS]
+        fit_lats = all_lats + reference_lats
+        fit_lons = all_lons + reference_lons
+        fit_span = max(max(fit_lats) - min(fit_lats), max(fit_lons) - min(fit_lons), 1.0)
+        projection_scale = max(2.5, min(18, 15 / fit_span))
+
         fig.update_layout(
             margin={"l": 0, "r": 0, "t": 0, "b": 0},
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
             showlegend=False,
             hoverlabel={
                 "bgcolor": "#1e293b",
@@ -354,20 +359,22 @@ def render_candidate_map(location: dict[str, Any], candidates: list[dict[str, An
             },
             geo={
                 "scope": "asia",
-                "projection": {"type": "mercator"},
                 "center": {"lat": center_lat, "lon": center_lon},
+                "projection": {"type": "mercator", "scale": projection_scale},
                 "showframe": False,
-                "showcoastlines": False,
+                "showcoastlines": True,
+                "coastlinecolor": "#cbd5e1",
                 "showland": True,
                 "landcolor": "#f8fafc",
                 "showocean": True,
                 "oceancolor": "#e0f2fe",
+                "showlakes": True,
+                "lakecolor": "#e0f2fe",
                 "showcountries": True,
                 "countrycolor": "#cbd5e1",
                 "showsubunits": True,
                 "subunitcolor": "#e2e8f0",
-                "lonaxis": {"range": [67.0, 99.0]},
-                "lataxis": {"range": [5.5, 37.5]},
+                "fitbounds": "locations",
             },
         )
 
