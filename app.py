@@ -40,6 +40,11 @@ app = Dash(__name__, title=APP_TITLE, suppress_callback_exceptions=True)
 server = app.server
 
 
+@server.get("/health")
+def health_check():
+    return {"status": "ok", "app": APP_TITLE}
+
+
 # Location extraction helper
 
 def _extract_location_hint(query: str) -> str:
