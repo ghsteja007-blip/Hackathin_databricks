@@ -15,10 +15,12 @@ env:
   - name: DATABRICKS_SQL_USE_CLOUD_FETCH
     value: "false"
   - name: OPENAI_API_KEY
-    valueFrom: openai_api_key
+    valueFrom: secret
   - name: OPENAI_MODEL
     value: "gpt-5.5"
   - name: ENABLE_WEB_RESOLUTION
     value: "true"
+  - name: ENABLE_TILE_MAP
+    value: "false"
   - name: FACILITY_ROW_LIMIT
     value: "50000"
