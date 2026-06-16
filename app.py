@@ -3,6 +3,7 @@ import math
 import os
 import re
 from typing import Any
+from urllib.parse import quote
 
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 import plotly.graph_objects as go
@@ -13,11 +14,78 @@ except Exception:
     dl = None
 
 from data_access import load_datasets
-from openai_helpers import ask_shortlist_copilot, parse_referral_query, spell_check_location
+from openai_helpers import (
+    ask_shortlist_copilot,
+    enrich_candidate_public_signals,
+    parse_referral_query,
+    spell_check_location,
+    translate_referral_results,
+)
 from referral_engine import rank_facilities, resolve_location
 
 
 APP_TITLE = "Referral Copilot"
+LANGUAGE_OPTIONS = [
+    {"label": "English", "value": "English"},
+    {"label": "Hindi", "value": "Hindi"},
+    {"label": "Telugu", "value": "Telugu"},
+    {"label": "Tamil", "value": "Tamil"},
+    {"label": "Kannada", "value": "Kannada"},
+    {"label": "Malayalam", "value": "Malayalam"},
+    {"label": "Marathi", "value": "Marathi"},
+    {"label": "Bengali", "value": "Bengali"},
+    {"label": "Gujarati", "value": "Gujarati"},
+    {"label": "Punjabi", "value": "Punjabi"},
+    {"label": "Urdu", "value": "Urdu"},
+]
+MEDICAL_DISPLAY_TERMS = [
+    "dialysis",
+    "hemodialysis",
+    "renal failure treatment",
+    "kidney transplant",
+    "nephrology",
+    "urology",
+    "internal medicine",
+    "emergency services",
+    "trauma care",
+    "icu",
+    "intensive care",
+    "ct scan",
+    "echocardiography",
+    "pathology laboratory",
+    "dialysis machines",
+    "cardiology",
+    "cardiothoracic surgery",
+    "gastroenterology",
+    "medical oncology",
+    "neurosurgery",
+    "pediatric surgery",
+    "pediatrics",
+    "neonatology",
+    "perinatal medicine",
+    "pediatric critical care",
+    "pediatric cardiology",
+    "pediatric gastroenterology",
+    "gynecology and obstetrics",
+    "orthopedic surgery",
+    "ophthalmology",
+    "otolaryngology",
+    "plastic surgery",
+    "cosmetic dentistry",
+    "preventive health checkup",
+    "video laryngoscopy",
+]
+NOISY_EVIDENCE_MARKERS = [
+    "hexahealth",
+    "listed as",
+    "top hospital",
+    "best hospital",
+    "book appointment",
+    "public feedback",
+    "rating",
+    "reviews",
+    "near me",
+]
 CHAT_PROMPTS = [
     {
         "id": "compare",
@@ -85,15 +153,66 @@ def render_empty_state() -> html.Div:
     )
 
 
+def _humanize_evidence_text(text: Any) -> str:
+    cleaned = str(text or "")
+    cleaned = re.sub(r"([a-z])([A-Z])", r"\1 \2", cleaned)
+    cleaned = cleaned.replace("&", " and ")
+    cleaned = re.sub(r"[_|;/]+", ", ", cleaned)
+    cleaned = re.sub(r"\b([A-Za-z][A-Za-z0-9+.-]*)(?:\s+\1\b){1,}", r"\1", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;")
+    return cleaned
+
+
+def _evidence_is_noisy(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in NOISY_EVIDENCE_MARKERS)
+
+
+def _display_label(text: str) -> str:
+    words = text.split()
+    short_words = {"icu", "ct", "ivf", "iui"}
+    return " ".join(word.upper() if word.lower() in short_words else word.capitalize() for word in words)
+
+
+def _clean_evidence_snippet(field: str, snippet: str, terms: list[str]) -> str:
+    text = _humanize_evidence_text(snippet)
+    if not text:
+        return ""
+
+    lowered = text.lower()
+    concepts: list[str] = []
+    for term in terms:
+        normalized = _humanize_evidence_text(term).lower()
+        if normalized and normalized not in concepts:
+            concepts.append(normalized)
+
+    for term in MEDICAL_DISPLAY_TERMS:
+        if re.search(rf"\b{re.escape(term)}\b", lowered, flags=re.IGNORECASE) and term not in concepts:
+            concepts.append(term)
+
+    if field in {"specialties", "procedure", "equipment", "capability"} and concepts:
+        return "Record mentions: " + ", ".join(_display_label(term) for term in concepts[:10]) + "."
+
+    if _evidence_is_noisy(text):
+        return "Record matched this field, but the source text looks directory-style; verify directly."
+
+    sentences = [part.strip(" ,;") for part in re.split(r"(?<=[.!?])\s+|\s{2,}", text) if part.strip(" ,;")]
+    filtered = [part for part in sentences if not _evidence_is_noisy(part)]
+    clean = " ".join(filtered or sentences or [text])
+    return clean[:177].rstrip(" ,.;") + "..." if len(clean) > 180 else clean
+
+
 def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
     if not items:
         return [html.Div("No direct matching evidence found in the facility record.", className="muted")]
 
     rendered = []
     for item in items[:6]:
-        label = item.get("field", "evidence").replace("_", " ").title()
-        terms = ", ".join(item.get("terms", [])[:5])
-        snippet = item.get("snippet") or ""
+        field = item.get("field", "evidence")
+        label = field.replace("_", " ").title()
+        terms_list = [_display_label(_humanize_evidence_text(term).lower()) for term in item.get("terms", [])[:5]]
+        terms = ", ".join(dict.fromkeys(terms_list))
+        snippet = _clean_evidence_snippet(field, item.get("snippet") or "", item.get("terms", []))
         rendered.append(
             html.Div(
                 className="evidence-row",
@@ -105,6 +224,82 @@ def render_evidence(items: list[dict[str, Any]]) -> list[html.Div]:
             )
         )
     return rendered
+
+
+def _rating_text(signal: dict[str, Any] | None) -> str:
+    if not signal:
+        return ""
+    rating = signal.get("google_rating")
+    count = signal.get("google_review_count")
+    if rating is None:
+        return ""
+    count_text = f" ({int(count):,} reviews)" if count else ""
+    source = signal.get("rating_source") or "public rating"
+    return f"{source}: {float(rating):.1f}/5{count_text}"
+
+
+def _is_http_url(url: Any) -> bool:
+    text = str(url or "").strip()
+    return text.startswith("http://") or text.startswith("https://")
+
+
+def _first_http_url(values: list[Any] | None) -> str:
+    for value in values or []:
+        text = str(value or "").strip()
+        if _is_http_url(text):
+            return text
+    return ""
+
+
+def render_public_signal(candidate: dict[str, Any]) -> html.Div:
+    signal = candidate.get("public_signal") or {}
+    if not signal:
+        return html.Div(
+            className="public-signal public-signal-empty",
+            children=[
+                html.Div("Public review signal", className="section-label"),
+                chip("not checked or unavailable", "chip chip-soft"),
+            ],
+        )
+
+    rating = signal.get("google_rating")
+    count = signal.get("google_review_count")
+    confidence = signal.get("confidence") or "unknown"
+    themes = signal.get("review_themes") or []
+    delta = candidate.get("public_score_delta")
+    url = signal.get("rating_url") if _is_http_url(signal.get("rating_url")) else _first_http_url(signal.get("source_urls"))
+
+    chips = []
+    if rating is not None:
+        chips.append(chip(f"rating {float(rating):.1f}/5", "chip chip-ok"))
+    if count:
+        chips.append(chip(f"{int(count):,} public reviews", "chip chip-soft"))
+    if delta not in (None, ""):
+        sign = "+" if float(delta) >= 0 else ""
+        chips.append(chip(f"{sign}{float(delta):.1f}/10 adjustment", "chip chip-soft"))
+    chips.append(chip(f"confidence: {confidence}", "chip chip-soft"))
+
+    return html.Div(
+        className="public-signal",
+        children=[
+            html.Div("Public review signal", className="section-label"),
+            html.Div(className="public-signal-chips", children=chips),
+            html.Div(
+                className="public-themes",
+                children=[chip(theme, "chip chip-soft") for theme in themes[:4]]
+                or [chip(signal.get("notes") or "No review themes found", "chip chip-warning")],
+            ),
+            html.A(
+                "Open public source",
+                href=url,
+                target="_blank",
+                rel="noreferrer",
+                className="chip chip-link public-source-link",
+            )
+            if url
+            else None,
+        ],
+    )
 
 
 def _env_enabled(name: str, default: str = "false") -> bool:
@@ -133,19 +328,53 @@ def _candidate_points(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _score_color(score: Any) -> str:
-    value = _safe_float(score) or 0
-    if value >= 85:
+    value = _score_value(score)
+    if value >= 8:
         return "#0f766e"
-    if value >= 65:
+    if value >= 6.5:
         return "#2563eb"
-    if value >= 45:
+    if value >= 4.5:
         return "#ca8a04"
     return "#64748b"
 
 
 def _score_radius(score: Any) -> int:
-    value = _safe_float(score) or 0
-    return int(max(8, min(20, 8 + value / 8)))
+    value = _score_value(score)
+    return int(max(8, min(22, 8 + value * 1.2)))
+
+
+def _numbered_marker_icon(rank: int, score: Any) -> dict[str, Any]:
+    color = _score_color(score)
+    size = int(max(34, min(48, _score_radius(score) * 2 + 8)))
+    center = round(size / 2, 1)
+    radius = center - 3
+    font_size = 13 if rank < 10 else 11
+    svg = f"""
+    <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">
+      <circle cx="{center}" cy="{center}" r="{radius}" fill="{color}" fill-opacity="0.94" stroke="#ffffff" stroke-width="3"/>
+      <text x="{center}" y="{center}" dominant-baseline="middle" text-anchor="middle"
+            fill="#ffffff" font-family="Arial, sans-serif" font-size="{font_size}" font-weight="800">{rank}</text>
+    </svg>
+    """
+    return {
+        "iconUrl": f"data:image/svg+xml;charset=UTF-8,{quote(svg)}",
+        "iconSize": [size, size],
+        "iconAnchor": [center, center],
+        "popupAnchor": [0, -center],
+        "className": "leaflet-numbered-marker",
+    }
+
+
+def _score_value(score: Any) -> float:
+    value = _safe_float(score)
+    if value is None:
+        return 0.0
+    return max(0.0, min(10.0, value))
+
+
+def _score_text(score: Any) -> str:
+    value = _safe_float(score)
+    return "n/a" if value is None else f"{_score_value(value):.1f}/10"
 
 
 def _map_bounds(lats: list[float], lons: list[float]) -> list[list[float]]:
@@ -181,7 +410,7 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
     lats = [candidate.get("latitude") for candidate in candidates]
     lons = [candidate.get("longitude") for candidate in candidates]
     names = [candidate.get("name") for candidate in candidates]
-    scores = [candidate.get("score", 0) for candidate in candidates]
+    scores = [_score_value(candidate.get("score")) for candidate in candidates]
     candidate_ids = [candidate.get("candidate_id") for candidate in candidates]
 
     hover_text = []
@@ -190,15 +419,19 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
         for item in candidate.get("evidence", [])[:3]:
             evidence_terms.extend(item.get("terms", [])[:3])
         evidence_label = ", ".join(dict.fromkeys(evidence_terms)) or "No direct evidence"
+        rating_label = _rating_text(candidate.get("public_signal"))
+        base_score = _safe_float(candidate.get("base_score"))
         hover_text.append(
             "<br>".join(
-                [
+                [line for line in [
                     f"<b>{candidate.get('name') or 'Unnamed facility'}</b>",
                     f"Distance: {candidate.get('distance_km', 0):.1f} km",
-                    f"Score: {candidate.get('score', 0):.0f}",
+                    f"Score: {_score_text(candidate.get('score'))}",
+                    f"Base score: {_score_text(base_score)}" if base_score is not None else "",
+                    rating_label,
                     f"Type: {candidate.get('facility_type') or 'facility'}",
                     f"Evidence: {evidence_label}",
-                ]
+                ] if line]
             )
         )
 
@@ -212,11 +445,13 @@ def render_plotly_candidate_map(location: dict[str, Any], candidates: list[dict[
             hovertext=hover_text,
             hoverinfo="text",
             marker={
-                "size": [max(10, min(26, 10 + score / 10)) for score in scores],
+                "size": [max(10, min(28, 10 + score * 1.7)) for score in scores],
                 "color": scores,
+                "cmin": 0,
+                "cmax": 10,
                 "colorscale": [[0, "#94a3b8"], [0.45, "#f59e0b"], [1, "#0f766e"]],
                 "line": {"width": 1, "color": "#ffffff"},
-                "colorbar": {"title": "Score", "thickness": 12},
+                "colorbar": {"title": "Score /10", "thickness": 12},
             },
             name="Candidate facilities",
             customdata=candidate_ids,
@@ -327,6 +562,7 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
         for item in candidate.get("evidence", [])[:3]:
             evidence_terms.extend(item.get("terms", [])[:3])
         evidence_label = ", ".join(dict.fromkeys(evidence_terms)) or "No direct evidence"
+        rating_label = _rating_text(candidate.get("public_signal"))
         color = _score_color(score)
 
         line_layers.append(
@@ -339,23 +575,24 @@ def render_leaflet_candidate_map(location: dict[str, Any], candidates: list[dict
             )
         )
         marker_layers.append(
-            dl.CircleMarker(
+            dl.Marker(
                 id={"type": "leaflet-facility-marker", "index": candidate_id},
-                center=[candidate["_lat"], candidate["_lon"]],
-                radius=_score_radius(score),
-                color="#ffffff",
-                weight=2,
-                fillColor=color,
-                fillOpacity=0.92,
+                position=[candidate["_lat"], candidate["_lon"]],
+                icon=_numbered_marker_icon(idx, score),
+                title=f"#{idx} {name} - {float(distance or 0):.1f} km - score {_score_text(score)}",
                 children=[
-                    dl.Tooltip(f"#{idx} {name} - {float(distance or 0):.1f} km", sticky=True),
+                    dl.Tooltip(
+                        f"#{idx} {name} - {float(distance or 0):.1f} km - score {_score_text(score)}",
+                        sticky=True,
+                    ),
                     dl.Popup(
                         html.Div(
                             className="leaflet-popup-content",
                             children=[
                                 html.Div(f"#{idx}", className="rank leaflet-rank"),
                                 html.Strong(name),
-                                html.Div(f"{float(distance or 0):.1f} km away - score {float(score or 0):.0f}"),
+                                html.Div(f"{float(distance or 0):.1f} km away - score {_score_text(score)}"),
+                                html.Div(rating_label, className="leaflet-rating") if rating_label else None,
                                 html.Div(candidate.get("facility_type") or "facility", className="muted"),
                                 html.Div(f"Evidence: {evidence_label}", className="leaflet-evidence"),
                             ],
@@ -399,6 +636,7 @@ def render_map_selection(candidate: dict[str, Any] | None = None) -> html.Div:
     for item in candidate.get("evidence", [])[:3]:
         evidence_terms.extend(item.get("terms", [])[:4])
     evidence_terms = list(dict.fromkeys(evidence_terms))
+    rating_label = _rating_text(candidate.get("public_signal"))
 
     return html.Div(
         className="map-selection-card",
@@ -409,7 +647,8 @@ def render_map_selection(candidate: dict[str, Any] | None = None) -> html.Div:
                 className="candidate-meta",
                 children=[
                     chip(f"{candidate.get('distance_km', 0):.1f} km"),
-                    chip(f"score {candidate.get('score', 0):.0f}"),
+                    chip(f"score {_score_text(candidate.get('score'))}"),
+                    chip(rating_label, "chip chip-ok") if rating_label else None,
                     chip(candidate.get("facility_type") or "facility"),
                 ],
             ),
@@ -425,20 +664,28 @@ def render_map_selection(candidate: dict[str, Any] | None = None) -> html.Div:
 def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
     suspicious = candidate.get("missing_or_suspicious") or []
     evidence = candidate.get("evidence") or []
-    source_urls = candidate.get("source_urls") or []
+    signal = candidate.get("public_signal") or {}
+    rating_url = signal.get("rating_url") if _is_http_url(signal.get("rating_url")) else ""
+    source_url = rating_url or _first_http_url(candidate.get("source_urls") or [])
+    website_url = str(candidate.get("website") or "").strip()
+    source_label = "Public source" if rating_url else "Source"
+    has_public_signal = bool(signal)
+    base_score = _safe_float(candidate.get("base_score"))
     contact_bits = []
 
     if candidate.get("phone"):
         contact_bits.append(chip(candidate["phone"], "chip chip-soft"))
     if candidate.get("email"):
         contact_bits.append(chip(candidate["email"], "chip chip-soft"))
-    if candidate.get("website"):
+    if _is_http_url(website_url):
         contact_bits.append(
-            html.A("Website", href=candidate["website"], target="_blank", rel="noreferrer", className="chip chip-link")
+            html.A("Website", href=website_url, target="_blank", rel="noreferrer", className="chip chip-link")
         )
-    if source_urls:
+    else:
+        contact_bits.append(chip("Website unavailable", "chip chip-soft chip-disabled"))
+    if source_url:
         contact_bits.append(
-            html.A("Source", href=source_urls[0], target="_blank", rel="noreferrer", className="chip chip-link")
+            html.A(source_label, href=source_url, target="_blank", rel="noreferrer", className="chip chip-link")
         )
 
     return html.Article(
@@ -450,7 +697,10 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
                     html.Div([html.Div(f"#{rank}", className="rank"), html.H3(candidate.get("name") or "Unnamed facility")]),
                     html.Div(
                         className="score-stack",
-                        children=[html.Strong(f"{candidate.get('score', 0):.0f}"), html.Span("score")],
+                        children=[
+                            html.Strong(f"{_score_value(candidate.get('score')):.1f}"),
+                            html.Span("/10 adjusted" if has_public_signal else "/10 score"),
+                        ],
                     ),
                 ],
             ),
@@ -458,6 +708,10 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
                 className="candidate-meta",
                 children=[
                     chip(f"{candidate.get('distance_km', 0):.1f} km"),
+                    chip(f"base {_score_text(base_score)}", "chip chip-soft") if base_score is not None else None,
+                    chip(_rating_text(candidate.get("public_signal")), "chip chip-ok")
+                    if _rating_text(candidate.get("public_signal"))
+                    else None,
                     chip(candidate.get("facility_type") or "facility"),
                     chip(candidate.get("operator_type") or "operator unknown"),
                     chip(candidate.get("city_state") or "location unknown"),
@@ -465,6 +719,7 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
             ),
             html.Div(className="section-label", children="Matching evidence"),
             html.Div(className="evidence-list", children=render_evidence(evidence)),
+            render_public_signal(candidate) if candidate.get("public_signal") else None,
             html.Div(className="section-label warning-label", children="Missing or suspicious evidence"),
             html.Div(
                 className="warning-list",
@@ -472,6 +727,17 @@ def render_candidate(candidate: dict[str, Any], rank: int) -> html.Article:
                 or [chip("No obvious evidence gaps detected", "chip chip-ok")],
             ),
             html.Div(className="candidate-contact", children=contact_bits),
+            html.Div(
+                className="candidate-actions",
+                children=[
+                    html.Button("Call", className="mini-action-button", title="Placeholder for future call workflow"),
+                    html.Button(
+                        "Schedule",
+                        className="mini-action-button mini-action-button--primary",
+                        title="Placeholder for future scheduling workflow",
+                    ),
+                ],
+            ),
             html.Button(
                 "Save",
                 id={"type": "save-candidate", "index": candidate["candidate_id"]},
@@ -540,7 +806,10 @@ def render_results(
                                         f"nearest: {nearest.get('name')} ({nearest.get('distance_km', 0):.1f} km)",
                                         "chip chip-soft",
                                     ),
-                                    chip(f"top score: {highest.get('name')}", "chip chip-soft"),
+                                    chip(
+                                        f"top score: {highest.get('name')} ({_score_text(highest.get('score'))})",
+                                        "chip chip-soft",
+                                    ),
                                 ],
                             ),
                             html.Div(id="map-selection-panel", children=render_map_selection(candidates[0])),
@@ -561,6 +830,16 @@ def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
     if not shortlist:
         return html.Div("No saved facilities yet.", className="muted")
 
+    def item_summary(item: dict[str, Any]) -> str:
+        base_score = _safe_float(item.get("base_score"))
+        parts = [
+            f"{item.get('distance_km', 0):.1f} km",
+            f"score {_score_text(item.get('score'))}",
+            f"base {_score_text(base_score)}" if base_score is not None else "",
+            _rating_text(item.get("public_signal")),
+        ]
+        return " - ".join(part for part in parts if part)
+
     return html.Div(
         className="shortlist-items",
         children=[
@@ -568,7 +847,7 @@ def render_shortlist(shortlist: list[dict[str, Any]] | None) -> html.Div:
                 className="shortlist-item",
                 children=[
                     html.Strong(item.get("name") or "Unnamed facility"),
-                    html.Span(f"{item.get('distance_km', 0):.1f} km - score {item.get('score', 0):.0f}"),
+                    html.Span(item_summary(item)),
                 ],
             )
             for item in shortlist
@@ -621,6 +900,7 @@ app.layout = html.Div(
         dcc.Store(id="theme-store", data="light"),
         dcc.Store(id="chat-history-store", data=[]),
         dcc.Download(id="shortlist-download"),
+        html.Div(id="chat-scroll-anchor", style={"display": "none"}),
         html.Header(
             className="app-header",
             children=[
@@ -781,37 +1061,75 @@ app.layout = html.Div(
                             className="controls-row",
                             children=[
                                 html.Div([
-                                    html.Label("Radius km", htmlFor="radius-input"),
-                                    dcc.Input(
+                                    html.Label("Search radius km", htmlFor="radius-input"),
+                                    dcc.Dropdown(
                                         id="radius-input",
-                                        type="number",
-                                        min=10,
-                                        max=1000,
-                                        step=10,
                                         value=250,
-                                        className="number-input",
+                                        options=[
+                                            {"label": "25 km", "value": 25},
+                                            {"label": "50 km", "value": 50},
+                                            {"label": "100 km", "value": 100},
+                                            {"label": "250 km", "value": 250},
+                                            {"label": "500 km", "value": 500},
+                                            {"label": "1000 km", "value": 1000},
+                                        ],
+                                        clearable=False,
+                                        searchable=False,
+                                        className="select-input",
                                     ),
                                 ]),
                                 html.Div([
-                                    html.Label("Results", htmlFor="limit-input"),
-                                    dcc.Input(
+                                    html.Label("Max results", htmlFor="limit-input"),
+                                    dcc.Dropdown(
                                         id="limit-input",
-                                        type="number",
-                                        min=3,
-                                        max=25,
-                                        step=1,
                                         value=8,
-                                        className="number-input",
+                                        options=[
+                                            {"label": "5", "value": 5},
+                                            {"label": "8", "value": 8},
+                                            {"label": "10", "value": 10},
+                                            {"label": "15", "value": 15},
+                                            {"label": "20", "value": 20},
+                                            {"label": "25", "value": 25},
+                                        ],
+                                        clearable=False,
+                                        searchable=False,
+                                        className="select-input",
                                     ),
                                 ]),
                             ],
                         ),
+                        html.Div(
+                            className="language-control",
+                            children=[
+                                html.Label("Result language", htmlFor="language-select"),
+                                dcc.Dropdown(
+                                    id="language-select",
+                                    value="English",
+                                    options=LANGUAGE_OPTIONS,
+                                    clearable=False,
+                                    searchable=False,
+                                    className="select-input",
+                                ),
+                            ],
+                        ),
                         html.Button("Search", id="search-button", className="primary-button"),
-                        html.Div(id="search-status", className="search-status"),
+                        dcc.Loading(
+                            id="search-status-loading",
+                            type="circle",
+                            color="#0f766e",
+                            className="search-loading-shell",
+                            children=html.Div(id="search-status", className="search-status"),
+                        ),
                     ],
                 ),
                 # Center: results panel
-                html.Section(id="results-panel", className="results-panel", children=render_empty_state()),
+                dcc.Loading(
+                    id="results-loading",
+                    type="circle",
+                    color="#0f766e",
+                    className="results-loading-shell",
+                    children=html.Section(id="results-panel", className="results-panel", children=render_empty_state()),
+                ),
                 # Right sidebar: shortlist
                 html.Aside(
                     className="shortlist-panel",
@@ -823,7 +1141,7 @@ app.layout = html.Div(
                                 html.Button("Clear", id="clear-shortlist", className="ghost-button"),
                             ],
                         ),
-                        html.Div(id="shortlist-panel-body", children=render_shortlist([])),
+                        html.Div(id="shortlist-panel-body", className="shortlist-panel-body", children=render_shortlist([])),
                         html.Button("Download CSV", id="download-shortlist", className="secondary-button full-width"),
                         html.Div(
                             className="chat-panel",
@@ -847,24 +1165,42 @@ app.layout = html.Div(
                                         for item in CHAT_PROMPTS
                                     ],
                                 ),
-                                dcc.Loading(
-                                    id="chat-loading",
-                                    type="dot",
-                                    color="#0f766e",
-                                    children=html.Div(
-                                        id="chat-history",
-                                        className="chat-thread",
-                                        children=render_chat_history([]),
+                                html.Div(
+                                    className="chat-thread-shell",
+                                    children=dcc.Loading(
+                                        id="chat-loading",
+                                        type="dot",
+                                        color="#0f766e",
+                                        children=html.Div(
+                                            id="chat-history",
+                                            className="chat-thread",
+                                            children=render_chat_history([]),
+                                        ),
                                     ),
                                 ),
-                                dcc.Textarea(
-                                    id="chat-input",
-                                    className="chat-input",
-                                    placeholder="Compare my shortlist, check what evidence is missing, or look up current details...",
-                                    value="",
+                                html.Div(
+                                    className="copilot-composer",
+                                    children=[
+                                        dcc.Textarea(
+                                            id="chat-input",
+                                            className="chat-input",
+                                            placeholder="Compare my shortlist, check evidence gaps, or look up current details...",
+                                            value="",
+                                        ),
+                                        html.Div(
+                                            className="copilot-composer-row",
+                                            children=[
+                                                html.Div(id="chat-status", className="chat-status"),
+                                                html.Button(
+                                                    "Ask Copilot",
+                                                    id="chat-submit",
+                                                    className="primary-button chat-submit",
+                                                    n_clicks=0,
+                                                ),
+                                            ],
+                                        ),
+                                    ],
                                 ),
-                                html.Button("Ask", id="chat-submit", className="primary-button chat-submit", n_clicks=0),
-                                html.Div(id="chat-status", className="chat-status"),
                             ],
                         ),
                     ],
@@ -876,6 +1212,23 @@ app.layout = html.Div(
             children="Referral support only. Verify availability, clinical fit, insurance, and emergency status before sending a patient.",
         ),
     ],
+)
+
+
+app.clientside_callback(
+    """
+    function(children) {
+        window.setTimeout(function() {
+            const thread = document.getElementById("chat-history");
+            if (thread) {
+                thread.scrollTop = thread.scrollHeight;
+            }
+        }, 50);
+        return "";
+    }
+    """,
+    Output("chat-scroll-anchor", "children"),
+    Input("chat-history", "children"),
 )
 
 
@@ -1042,6 +1395,7 @@ app.clientside_callback(
     State("care-need-location", "value"),
     State("radius-input", "value"),
     State("limit-input", "value"),
+    State("language-select", "value"),
     State("geolocation-store", "data"),
     prevent_initial_call=True,
 )
@@ -1054,6 +1408,7 @@ def run_search(
     care_need_loc: str,
     radius_km: int,
     limit: int,
+    display_language: str,
     geolocation_data: dict | None,
 ):
     mode = mode or "freetext"
@@ -1061,6 +1416,17 @@ def run_search(
     try:
         datasets, data_notes = load_datasets()
         correction_note = ""
+        try:
+            radius_value = float(radius_km if radius_km not in (None, "") else 250)
+        except (TypeError, ValueError):
+            radius_value = 250.0
+        radius_value = max(1.0, min(1000.0, radius_value))
+
+        try:
+            limit_value = int(limit if limit not in (None, "") else 8)
+        except (TypeError, ValueError):
+            limit_value = 8
+        limit_value = max(1, min(25, limit_value))
 
         # Resolve parsed need and location per mode.
         if mode == "freetext":
@@ -1168,15 +1534,36 @@ def run_search(
             datasets.facilities,
             location=location,
             parsed_need=parsed,
-            radius_km=float(radius_km or 250),
-            limit=int(limit or 8),
+            radius_km=radius_value,
+            limit=limit_value,
         )
+        if candidates:
+            candidates, public_note = enrich_candidate_public_signals(
+                candidates,
+                care_need=parsed.care_need,
+                location_label=location.get("label") or parsed.location,
+            )
+            if public_note and re.search(r"\b(skipped|unavailable|rate-limited|returned no)\b", public_note, re.IGNORECASE):
+                data_notes = data_notes + [f"Public review signal: {public_note}"]
 
         parsed_dict = parsed.to_dict()
+        translation_note = None
+        if candidates and (display_language or "English").strip().lower() != "english":
+            candidates, parsed_dict, translation_note = translate_referral_results(
+                candidates,
+                parsed_dict,
+                display_language or "English",
+            )
+        if translation_note and re.search(r"\b(skipped|unavailable|rate-limited|failed)\b", translation_note, re.IGNORECASE):
+            data_notes = data_notes + [translation_note]
+
         return (
             render_results(parsed_dict, location, candidates, data_notes),
             candidates,
-            f"Found {len(candidates)} candidates using {parsed.source} parsing. {correction_note}".strip(),
+            (
+                f"Found {len(candidates)} candidates within {radius_value:g} km "
+                f"(showing up to {limit_value}) using {parsed.source} parsing. {correction_note}"
+            ).strip(),
         )
 
     except Exception as exc:
@@ -1305,17 +1692,27 @@ def download_shortlist(n_clicks, shortlist):
     shortlist = shortlist or []
     rows = []
     for item in shortlist:
+        signal = item.get("public_signal") or {}
         rows.append(
             {
                 "name": item.get("name"),
                 "distance_km": item.get("distance_km"),
                 "score": item.get("score"),
+                "base_score": item.get("base_score"),
+                "public_score_delta": item.get("public_score_delta"),
+                "google_rating": signal.get("google_rating"),
+                "google_review_count": signal.get("google_review_count"),
+                "rating_source": signal.get("rating_source"),
+                "rating_url": signal.get("rating_url"),
+                "official_website_url": signal.get("official_website_url"),
+                "public_signal": json.dumps(item.get("public_signal", {}), ensure_ascii=False),
                 "facility_type": item.get("facility_type"),
                 "operator_type": item.get("operator_type"),
                 "city_state": item.get("city_state"),
                 "phone": item.get("phone"),
                 "email": item.get("email"),
                 "website": item.get("website"),
+                "source_urls": json.dumps(item.get("source_urls", []), ensure_ascii=False),
                 "evidence": json.dumps(item.get("evidence", []), ensure_ascii=False),
                 "missing_or_suspicious": json.dumps(item.get("missing_or_suspicious", []), ensure_ascii=False),
             }

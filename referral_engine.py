@@ -303,6 +303,10 @@ def _distance_score(distance_km: float, radius_km: float) -> float:
     return max(5, 70 * (1 - (distance_km / max(radius_km, 1))))
 
 
+def _score_0_to_10(raw_score: float) -> float:
+    return round(max(0.0, min(10.0, raw_score / 12.0)), 1)
+
+
 def _source_urls(row: pd.Series) -> list[str]:
     urls = []
     urls.extend(parse_jsonish_list(row.get("source_urls")))
@@ -358,14 +362,15 @@ def rank_facilities(
             emergency_bonus += 10 if any(term in combined for term in ["emergency", "24/7", "24 hrs", "icu", "trauma"]) else -10
 
         missing_penalty = min(18, len(suspicious) * 2.5)
-        score = evidence_score + _distance_score(distance_km, radius_km) + facility_bonus + emergency_bonus - missing_penalty
+        raw_score = evidence_score + _distance_score(distance_km, radius_km) + facility_bonus + emergency_bonus - missing_penalty
 
         candidate_id = str(row.get("unique_id") or f"{row_index}-{name}")
         candidates.append(
             {
                 "candidate_id": candidate_id,
                 "name": str(name),
-                "score": round(score, 2),
+                "score": _score_0_to_10(raw_score),
+                "raw_score": round(raw_score, 2),
                 "distance_km": round(distance_km, 1),
                 "facility_type": str(row.get("facilityTypeId") or "facility"),
                 "operator_type": str(row.get("operatorTypeId") or "unknown"),
@@ -381,5 +386,5 @@ def rank_facilities(
             }
         )
 
-    candidates.sort(key=lambda item: (-item["score"], item["distance_km"], item["name"]))
+    candidates.sort(key=lambda item: (-item["raw_score"], item["distance_km"], item["name"]))
     return candidates[:limit]
